@@ -1,0 +1,14 @@
+{
+  "name": "hodari-db",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MongoDB Atlas setup and MCP integration for hodari",
+  "scripts": {
+    "setup": "node setup_db.js",
+    "test:mcp": "node --use-system-ca test_mcp_roundtrip.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "mongodb": "^6.7.0"
+  }
+}
