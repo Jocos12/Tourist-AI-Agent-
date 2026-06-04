@@ -12,7 +12,10 @@ STEPS:
    - If it's hot (>28°C), prefer shaded or air-conditioned places.
    - Mention weather briefly in the voice_summary only if it affects the picks.
 
-2. Pick the 2–3 best candidates that satisfy ALL plan constraints (budget, dietary, time).
+2. Pick the BEST 2–3 candidates from the list. You MUST include at least 2 stops — never return
+   fewer than 2 even if some candidates only partially match the constraints. Rank by how well each
+   candidate fits the plan (budget, dietary, time); use the top scorers regardless of perfect fit.
+   If only 1 candidate exists, duplicate it at a nearby time slot as a fallback.
 
 3. For each consecutive stop pair, call compute_routes (origin = previous stop, destination = next stop, travel_mode = WALK).
    Extract from the response: distance, duration, and the encoded polyline string.
