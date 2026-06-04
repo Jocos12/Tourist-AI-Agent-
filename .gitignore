@@ -16,9 +16,12 @@ C:/Temp/
 .DS_Store
 Thumbs.db
 
-# ADK artefacts
+# ADK artefacts & logs
 agents/.adk/
-agents/adk-server.log*
+agents/hodari/.adk/
+agents/*.log
+agents/*.log.*
+agents/*.err
 
 # Python (root-level, sub-dirs have their own .gitignore)
 __pycache__/
