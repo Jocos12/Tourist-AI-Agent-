@@ -139,6 +139,13 @@ gemini mcp add -s user -t http \
 ### Backend agents (Python 3.10+)
 
 ```bash
+# ── Step 0: MongoDB MCP HTTP server (required before starting ADK) ──────────
+# Reads MDB_MCP_CONNECTION_STRING from env (or set it to your MONGODB_URI).
+# Keep this running in a dedicated terminal.
+MDB_MCP_CONNECTION_STRING="<your atlas URI>" npx mongodb-mcp-server --transport http --httpPort=3100
+# Windows PowerShell:
+# $env:MDB_MCP_CONNECTION_STRING="<your atlas URI>"; npx mongodb-mcp-server --transport http --httpPort=3100
+
 cd agents
 
 # First-time setup — use the py launcher to target official CPython 3.12

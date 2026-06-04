@@ -1,52 +1,147 @@
 """
-MongoDB tools for Hodari agents (Phase 2).
+MongoDB tools for Hodari agents.
 
-Provides:
-  load_user_profile        — Orchestrator reads users collection
-  save_preference          — Orchestrator writes interactions collection
-  find_similar_preferences — Explorer queries Atlas Vector Search
+All Atlas operations go through the MongoDB MCP HTTP server
+(MONGODB_MCP_URL, default http://localhost:3100/mcp) — not a direct driver
+connection. This satisfies the MongoDB prize-track partner-integration
+requirement: every read/write to hodari.interactions is routed through MCP.
 """
 
-import os
+import json
 import logging
-import requests
+import os
+import re
+import uuid
 from typing import Optional
-from pymongo import MongoClient
+
+import requests
 from google.adk.tools import ToolContext
 
 logger = logging.getLogger(__name__)
 
-_client: Optional[MongoClient] = None
+MDB_MCP_URL = os.getenv("MONGODB_MCP_URL", "http://localhost:3100/mcp")
+HODARI_DB = os.getenv("MONGODB_DATABASE", "hodari")
+
+_session_id: Optional[str] = None
 
 
-def _db():
-    global _client
-    if _client is None:
-        _client = MongoClient(os.environ["MONGODB_URI"])
-    return _client[os.environ.get("MONGODB_DATABASE", "hodari")]
+# ── MCP session & transport ──────────────────────────────────────────────────
+
+def _init_session() -> str:
+    resp = requests.post(
+        MDB_MCP_URL,
+        json={
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "hodari-agents", "version": "1.0"},
+            },
+        },
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    sid = resp.headers.get("mcp-session-id")
+    if not sid:
+        raise RuntimeError("MCP server did not return a session ID")
+    return sid
 
 
-def _user_id(tool_context: ToolContext) -> str:
-    """Extract user_id from ADK ToolContext (handles multiple ADK versions)."""
-    try:
-        return tool_context.invocation_context.session.user_id
-    except AttributeError:
-        pass
-    try:
-        return tool_context.state.get("_user_id", "anonymous")
-    except Exception:
-        return "anonymous"
+def _mcp_tool(tool_name: str, arguments: dict) -> dict:
+    """Call a MongoDB MCP tool; auto-renews the session on expiry (once)."""
+    global _session_id
+    if not _session_id:
+        _session_id = _init_session()
 
+    def _post(sid: str) -> requests.Response:
+        return requests.post(
+            MDB_MCP_URL,
+            json={
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": arguments},
+            },
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "mcp-session-id": sid,
+            },
+            timeout=30,
+        )
+
+    resp = _post(_session_id)
+    resp.raise_for_status()
+
+    # Parse SSE line(s): "data: {...}"
+    for line in resp.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        payload = json.loads(line[6:])
+
+        # Session expired — renew once and retry
+        if payload.get("error", {}).get("code") == -32003:
+            _session_id = _init_session()
+            resp = _post(_session_id)
+            resp.raise_for_status()
+            for line2 in resp.text.splitlines():
+                if line2.startswith("data: "):
+                    payload = json.loads(line2[6:])
+                    break
+
+        if "error" in payload:
+            raise RuntimeError(f"MCP error calling '{tool_name}': {payload['error']}")
+        return payload.get("result", {})
+
+    raise RuntimeError(f"No response data from MCP tool '{tool_name}'")
+
+
+def _parse_docs(result: dict) -> list[dict]:
+    """Extract document list from an MCP tool result."""
+    # insert-many / update-many return structuredContent
+    sc = result.get("structuredContent") or {}
+    if isinstance(sc, list):
+        return sc
+    if "documents" in sc:
+        return sc["documents"]
+
+    # find / aggregate embed results inside untrusted-user-data blocks.
+    # The warning text itself mentions the tag names, so the first regex match
+    # captures " and " — not valid JSON. Use findall and try every match.
+    for item in result.get("content", []):
+        text = item.get("text", "")
+        for block in re.findall(
+            r"<untrusted-user-data-[^>]+>(.*?)</untrusted-user-data-[^>]+>",
+            text,
+            re.DOTALL,
+        ):
+            try:
+                parsed = json.loads(block.strip())
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+    return []
+
+
+# ── Embedding (Vertex AI — still Python-side, no driver involved) ────────────
 
 def _embed(text: str) -> list[float]:
-    """768-dim embedding via Vertex AI text-embedding-004 (ADC auth, no API key needed)."""
+    """768-dim embedding via Vertex AI text-embedding-004 (ADC auth)."""
     import google.auth
-    import google.auth.transport.requests as _auth_transport
+    import google.auth.transport.requests as _tr
 
     creds, detected_project = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
-    creds.refresh(_auth_transport.Request())
+    creds.refresh(_tr.Request())
 
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or detected_project
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
@@ -60,10 +155,7 @@ def _embed(text: str) -> list[float]:
     )
     resp = requests.post(
         url,
-        headers={
-            "Authorization": f"Bearer {creds.token}",
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"},
         json={"instances": [{"content": text, "task_type": "RETRIEVAL_QUERY"}]},
         timeout=10,
     )
@@ -71,20 +163,39 @@ def _embed(text: str) -> list[float]:
     return resp.json()["predictions"][0]["embeddings"]["values"]
 
 
-# ── Public tools ────────────────────────────────────────────────────────────
+# ── ADK tool helpers ─────────────────────────────────────────────────────────
+
+def _user_id(tool_context: ToolContext) -> str:
+    try:
+        return tool_context.invocation_context.session.user_id
+    except AttributeError:
+        pass
+    try:
+        return tool_context.state.get("_user_id", "anonymous")
+    except Exception:
+        return "anonymous"
+
+
+# ── Public tools ─────────────────────────────────────────────────────────────
 
 def load_user_profile(tool_context: ToolContext) -> dict:
-    """Load the current user's preferences and profile from MongoDB.
+    """Load the current user's profile from MongoDB via MCP.
 
-    Call this at the start of every planning request to personalise the itinerary.
+    Call at the start of every planning request to personalise the itinerary.
     Returns dietary restrictions, budget tier, accessibility needs, and language.
     Returns a minimal dict if no profile exists yet (new user).
     """
     uid = _user_id(tool_context)
     try:
-        doc = _db()["users"].find_one({"user_id": uid}, {"_id": 0})
-        if doc:
-            # Cache in session state so sub-agents can read it
+        result = _mcp_tool("find", {
+            "database": HODARI_DB,
+            "collection": "users",
+            "filter": {"user_id": uid},
+            "limit": 1,
+        })
+        docs = _parse_docs(result)
+        if docs:
+            doc = {k: v for k, v in docs[0].items() if k != "_id"}
             tool_context.state["user_profile"] = doc
             return doc
         profile = {"user_id": uid, "new_user": True}
@@ -108,17 +219,19 @@ def save_preference(
         place_id:   Google Place ID of the place.
         place_name: Human-readable name (e.g. "Alive Restaurant").
         city:       City of the place (e.g. "Barcelona").
-        action:     Interaction type — one of: recommended, liked, visited, skipped, disliked.
+        action:     One of: recommended, liked, visited, skipped, disliked.
         tool_context: Injected by ADK.
 
-    Returns a short confirmation string.
+    Writes to Atlas via the MongoDB MCP server — no direct driver call.
     """
     uid = _user_id(tool_context)
     try:
         embedding = _embed(f"{place_name} {city} {action}")
-        _db()["interactions"].update_one(
-            {"user_id": uid, "place_id": place_id},
-            {
+        _mcp_tool("update-many", {
+            "database": HODARI_DB,
+            "collection": "interactions",
+            "filter": {"user_id": uid, "place_id": place_id},
+            "update": {
                 "$set": {
                     "place_name": place_name,
                     "city": city,
@@ -126,8 +239,8 @@ def save_preference(
                     "embedding": embedding,
                 }
             },
-            upsert=True,
-        )
+            "upsert": True,
+        })
         return f"Saved: {action} → {place_name} ({city})"
     except Exception as exc:
         logger.warning("save_preference failed: %s", exc)
@@ -141,15 +254,13 @@ def find_similar_preferences(
 ) -> list[dict]:
     """Find places from the user's past interactions most similar to the current request.
 
-    Use this BEFORE searching for new places to bias results toward the user's taste.
-    Returns an empty list if the user has no history or vector search is not yet configured.
+    Use BEFORE searching for new places to bias results toward the user's taste.
+    Returns an empty list if the user has no history or the vector index is not ready.
 
     Args:
-        query: What the user is looking for (e.g. "vegetarian tapas near Camp Nou Barcelona").
+        query: What the user is looking for (e.g. "vegetarian tapas near Camp Nou").
         limit: Maximum results to return (default 5).
         tool_context: Injected by ADK.
-
-    Returns list of dicts: [{place_name, city, action, score}, ...], sorted by similarity.
     """
     uid = _user_id(tool_context)
     try:
@@ -176,9 +287,12 @@ def find_similar_preferences(
                 }
             },
         ]
-        results = list(_db()["interactions"].aggregate(pipeline))
-        return results
+        result = _mcp_tool("aggregate", {
+            "database": HODARI_DB,
+            "collection": "interactions",
+            "pipeline": pipeline,
+        })
+        return _parse_docs(result)
     except Exception as exc:
-        # Vector search index not set up yet — gracefully return empty
         logger.info("find_similar_preferences returned empty (index not ready?): %s", exc)
         return []
