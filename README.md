@@ -57,7 +57,7 @@ flowchart TD
 | Frontend | Next.js 15 (App Router), React 18, Tailwind CSS, PWA |
 | Map UI | Google Maps JavaScript API via `@vis.gl/react-google-maps` |
 | Agent runtime | Python 3.12, Google Agent Development Kit (ADK) |
-| LLM | Gemini 2.5 Flash via Vertex AI |
+| LLM | Gemini 3.5 Flash via Vertex AI |
 | Database | MongoDB Atlas (`users`, `places`, `interactions`) |
 | DB access | MongoDB MCP Server (no direct driver) |
 | Maps grounding | Maps Grounding Lite MCP (`https://mapstools.googleapis.com/mcp`) |
@@ -152,8 +152,8 @@ gcloud auth application-default login
 |---|---|
 | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` — route Gemini through Vertex AI |
 | `GOOGLE_CLOUD_PROJECT` | your GCP project **ID** |
-| `GOOGLE_CLOUD_LOCATION` | Vertex region (e.g. `global`, `us-central1`) |
-| `GEMINI_MODEL` | `gemini-2.5-flash` |
+| `GOOGLE_CLOUD_LOCATION` | `global` — required; Gemini 3.x is served only from the global Vertex endpoint (regional endpoints like `us-central1` return 404) |
+| `GEMINI_MODEL` | `gemini-3.5-flash` |
 | `GOOGLE_MAPS_API_KEY` | backend key, restricted to Maps Grounding Lite |
 | `MONGODB_URI` | Atlas connection string |
 | `MONGODB_DATABASE` | `hodari` |

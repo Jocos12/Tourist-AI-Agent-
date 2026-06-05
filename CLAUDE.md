@@ -8,7 +8,7 @@ Hodari is a multi-agent tourist AI assistant built for the 2026 FIFA World Cup. 
 
 The full architecture spec lives in `Hodari_System_Architecture.md` — read it before making structural decisions.
 
-**Implementation status:** No code exists yet. This repo currently holds only the architecture document.
+**Implementation status:** Implemented. Backend agents live in `agents/hodari/` (ADK); the Next.js client lives in `client/`. `Hodari_System_Architecture.md` remains the design reference.
 
 ---
 
@@ -19,7 +19,7 @@ The full architecture spec lives in `Hodari_System_Architecture.md` — read it 
 | Frontend | Next.js (Responsive Web App / PWA) |
 | Agent runtime | Python on Google Cloud Run |
 | Orchestration | Google Cloud Agent Builder |
-| LLM | Gemini 3; embeddings via `text-embedding-004` (768 dims) |
+| LLM | Gemini 3.5 Flash (`gemini-3.5-flash`) via Vertex AI — `global` location only (Gemini 3.x is not served from regional endpoints); embeddings via `text-embedding-004` (768 dims) |
 | Database | MongoDB Atlas |
 | Vector search | Atlas Vector Search (HNSW, cosine similarity) |
 | Maps MCP | Google Maps Grounding Lite (`https://mapstools.googleapis.com/mcp`) |
