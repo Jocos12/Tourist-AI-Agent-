@@ -2,9 +2,7 @@
 *.png
 *.jpg
 *.jpeg
-image1
-image2
-image3
+image*
 
 # Playwright MCP artefacts
 .playwright-mcp/
@@ -22,6 +20,7 @@ agents/hodari/.adk/
 agents/*.log
 agents/*.log.*
 agents/*.err
+agents/mcp-*.txt
 
 # Python (root-level, sub-dirs have their own .gitignore)
 __pycache__/
