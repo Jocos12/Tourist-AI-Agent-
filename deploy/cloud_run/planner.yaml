@@ -1,0 +1,31 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: hodari-planner
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"
+    spec:
+      timeoutSeconds: 300
+      containers:
+        - image: IMAGE_PLACEHOLDER   # replaced by deploy.sh
+          env:
+            - name: AGENT_SERVICE
+              value: planner
+            - name: PORT
+              value: "8080"
+            - name: GOOGLE_GENAI_USE_VERTEXAI
+              value: "TRUE"
+            # Secrets injected at deploy time via --set-secrets in deploy.sh:
+            #   GOOGLE_MAPS_API_KEY (unused by planner but kept for consistency)
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          ports:
+            - containerPort: 8080

@@ -1,0 +1,52 @@
+export interface Coordinates {
+  lat: number
+  lng: number
+}
+
+export interface Place {
+  place_id: string
+  name: string
+  address: string
+  coordinates: Coordinates
+  categories: string[]
+  rating?: number
+  price_level?: string
+  summary?: string
+  maps_url?: string
+}
+
+export interface TravelLeg {
+  distance: string
+  duration: string
+  encoded_polyline?: string
+}
+
+export interface ItineraryStop {
+  place_id: string
+  name: string
+  address: string
+  coordinates: Coordinates
+  arrival_time?: string
+  duration_at_stop?: string
+  travel_from_prev?: TravelLeg
+  rationale: string
+}
+
+export interface Itinerary {
+  stops: ItineraryStop[]
+  total_duration?: string
+  total_distance?: string
+  voice_summary: string
+}
+
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type StreamChunk =
+  | { type: 'thinking'; agent: string; label: string }
+  | { type: 'text'; text: string }
+
+export type Theme = 'dark' | 'light'

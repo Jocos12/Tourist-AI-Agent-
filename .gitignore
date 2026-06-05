@@ -1,0 +1,30 @@
+# Screenshots from Playwright testing
+*.png
+*.jpg
+*.jpeg
+image*
+
+# Playwright MCP artefacts
+.playwright-mcp/
+
+# Temp logs
+C:/Temp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ADK artefacts & logs
+agents/.adk/
+agents/hodari/.adk/
+agents/*.log
+agents/*.log.*
+agents/*.err
+agents/mcp-*.txt
+
+# Python (root-level, sub-dirs have their own .gitignore)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.env
