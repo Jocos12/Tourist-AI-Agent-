@@ -1,0 +1,33 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: hodari-orchestrator
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"
+    spec:
+      timeoutSeconds: 300
+      containers:
+        - image: IMAGE_PLACEHOLDER   # replaced by deploy.sh
+          env:
+            - name: AGENT_SERVICE
+              value: orchestrator
+            - name: PORT
+              value: "8080"
+            - name: GOOGLE_GENAI_USE_VERTEXAI
+              value: "TRUE"
+            # Secrets injected at deploy time via --set-secrets in deploy.sh:
+            #   GOOGLE_MAPS_API_KEY, MONGODB_URI (→ MONGODB_MCP_URL via sidecar)
+            # Service URLs injected after sub-services are deployed:
+            #   PLANNER_SERVICE_URL, EXPLORER_SERVICE_URL, ITINERARY_SERVICE_URL
+          resources:
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          ports:
+            - containerPort: 8080

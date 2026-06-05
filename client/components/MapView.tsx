@@ -106,7 +106,7 @@ export function MapView({ places, itinerary, activeStopIndex, onMarkerClick, use
 
           return (
             <AdvancedMarker
-              key={'place_id' in item ? item.place_id : i}
+              key={`${('place_id' in item && item.place_id) ? item.place_id : 'm'}-${i}`}
               position={coords}
               title={name}
               onClick={() => onMarkerClick(i)}

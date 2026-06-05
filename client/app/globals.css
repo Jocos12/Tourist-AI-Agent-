@@ -155,6 +155,41 @@ body::before {
 .prose-hodari a { color: #F56A00; text-decoration: none; }
 .prose-hodari a:hover { text-decoration: underline; }
 
+/* ── Glassmorphism — frosted boxes that float over the map ────────────────── */
+.glass {
+  background: rgba(18, 18, 22, 0.55);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.60), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+html.light .glass {
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(20, 18, 14, 0.08);
+  box-shadow: 0 12px 32px -14px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+}
+.glass-active {
+  border-color: rgba(245, 106, 0, 0.55);
+  box-shadow: 0 14px 40px -10px rgba(245, 106, 0, 0.30), 0 0 0 1px rgba(245, 106, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+/* ── Streaming caret (blinks at the end of a generating reply) ───────────── */
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+.stream-caret {
+  display: inline-block;
+  width: 7px;
+  height: 0.95em;
+  margin-left: 3px;
+  vertical-align: -2px;
+  border-radius: 1px;
+  background: #F56A00;
+  animation: caret-blink 1s steps(1, end) infinite;
+}
+
 /* ── User location dot ────────────────────────────────────────────────────── */
 @keyframes location-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(66, 133, 244, 0.5); }
