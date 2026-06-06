@@ -40,6 +40,9 @@ _CITY_ALIASES: dict[str, str] = {
     "monterrey": "Monterrey", "bbva": "Monterrey",
 }
 
+# Host cities present in agents/scripts/places_data.py (World Cup venues).
+SEEDED_CITIES: frozenset[str] = frozenset(_CITY_ALIASES.values())
+
 
 def _normalize_city(raw: str) -> str:
     """Map a raw location string from the Planner to a seeded city name."""
@@ -47,7 +50,12 @@ def _normalize_city(raw: str) -> str:
     for alias, city in _CITY_ALIASES.items():
         if alias in lower:
             return city
-    return raw
+    return raw.strip()
+
+
+def is_seeded_city(city: str) -> bool:
+    """True when the places collection has been seeded for this city."""
+    return _normalize_city(city) in SEEDED_CITIES
 
 
 def find_places_by_vector(
@@ -70,8 +78,16 @@ def find_places_by_vector(
         limit: Max results to return (default 8).
         tool_context: Injected by ADK.
     """
+    canonical_city = _normalize_city(city)
+    if canonical_city not in SEEDED_CITIES:
+        logger.info(
+            "VECTOR_SEARCH skipped: city=%r -> canonical=%r (not in seeded host cities)",
+            city,
+            canonical_city,
+        )
+        return []
+
     try:
-        canonical_city = _normalize_city(city)
         logger.info("VECTOR_SEARCH called: query=%r city=%r -> canonical=%r", query, city, canonical_city)
         q_embedding = _embed(query)
         pipeline = [

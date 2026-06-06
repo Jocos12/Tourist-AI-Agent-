@@ -157,12 +157,12 @@ export function ChatPanel({
     <div className="relative flex flex-col h-full overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────── */}
-      <div className="px-6 pt-5 pb-4 flex items-center justify-between shrink-0">
+      <div className="px-5 pt-3.5 pb-3 flex items-center justify-between shrink-0">
         <div>
-          <h1 className="font-display text-xl font-semibold tracking-tight text-text">
+          <h1 className="font-display text-lg font-semibold tracking-tight text-text">
             Hodari
           </h1>
-          <p className="font-mono text-[10px] text-text3 tracking-widest uppercase mt-0.5">
+          <p className="font-mono text-[9px] text-text3 tracking-widest uppercase mt-0.5">
             FIFA World Cup 2026 · Guide
           </p>
         </div>
@@ -252,7 +252,7 @@ export function ChatPanel({
                 className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-up`}
               >
                 {msg.role === 'user' ? (
-                  <div className="max-w-[78%] bg-surface2 border border-border/60 rounded-2xl rounded-tr-sm px-4 py-3">
+                  <div className="max-w-[80%] bg-surface2 border border-border/60 rounded-2xl rounded-tr-sm px-3.5 py-2.5">
                     <p className="text-sm text-text leading-relaxed">{msg.content}</p>
                   </div>
                 ) : (

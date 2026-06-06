@@ -11,8 +11,10 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 from google.adk.tools import ToolContext
@@ -53,9 +55,21 @@ def _init_session() -> str:
     return sid
 
 
+def _record_substep(name: str, started: float) -> None:
+    if os.getenv("HODARI_PROFILING", "1").lower() in ("0", "false", "no"):
+        return
+    try:
+        from ..telemetry import record_substep
+
+        record_substep(name, time.perf_counter() - started)
+    except Exception:
+        pass
+
+
 def _mcp_tool(tool_name: str, arguments: dict) -> dict:
     """Call a MongoDB MCP tool; auto-renews the session on expiry (once)."""
     global _session_id
+    started = time.perf_counter()
     if not _session_id:
         _session_id = _init_session()
 
@@ -97,6 +111,7 @@ def _mcp_tool(tool_name: str, arguments: dict) -> dict:
 
         if "error" in payload:
             raise RuntimeError(f"MCP error calling '{tool_name}': {payload['error']}")
+        _record_substep(f"mongo_mcp:{tool_name}", started)
         return payload.get("result", {})
 
     raise RuntimeError(f"No response data from MCP tool '{tool_name}'")
@@ -138,6 +153,7 @@ def _embed(text: str) -> list[float]:
     import google.auth
     import google.auth.transport.requests as _tr
 
+    started = time.perf_counter()
     creds, detected_project = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
@@ -160,6 +176,7 @@ def _embed(text: str) -> list[float]:
         timeout=10,
     )
     resp.raise_for_status()
+    _record_substep("vertex_embed:text-embedding-004", started)
     return resp.json()["predictions"][0]["embeddings"]["values"]
 
 
@@ -206,6 +223,91 @@ def load_user_profile(tool_context: ToolContext) -> dict:
         return {}
 
 
+def _city_from_address(address: str) -> str:
+    """Best-effort city extraction from a Google-style address string."""
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+    if len(parts) >= 2:
+        return parts[-2]
+    return parts[-1] if parts else ""
+
+
+def _persist_preference_sync(
+    user_id: str,
+    place_id: str,
+    place_name: str,
+    city: str,
+    action: str,
+) -> None:
+    """Write one interaction record (embedding + MCP upsert). Blocking."""
+    embedding = _embed(f"{place_name} {city} {action}")
+    _mcp_tool("update-many", {
+        "database": HODARI_DB,
+        "collection": "interactions",
+        "filter": {"user_id": user_id, "place_id": place_id},
+        "update": {
+            "$set": {
+                "place_name": place_name,
+                "city": city,
+                "action": action,
+                "embedding": embedding,
+            }
+        },
+        "upsert": True,
+    })
+
+
+def enqueue_preference_saves(user_id: str, stops: list[dict[str, Any]]) -> int:
+    """Persist itinerary stop recommendations in a background thread.
+
+    Returns the number of stops queued. Non-blocking for the caller.
+    """
+    if not stops:
+        return 0
+
+    work = []
+    for stop in stops:
+        place_id = stop.get("place_id")
+        place_name = stop.get("name")
+        if not place_id or not place_name:
+            continue
+        city = stop.get("city") or _city_from_address(stop.get("address", ""))
+        work.append((place_id, place_name, city))
+
+    if not work:
+        return 0
+
+    def _run() -> None:
+        for place_id, place_name, city in work:
+            try:
+                _persist_preference_sync(
+                    user_id, place_id, place_name, city, "recommended"
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Background save_preference failed for %s: %s", place_name, exc
+                )
+
+    threading.Thread(
+        target=_run,
+        name="hodari-save-preferences",
+        daemon=True,
+    ).start()
+    logger.info("Queued %d preference saves for user %s", len(work), user_id)
+    return len(work)
+
+
+def parse_itinerary_stops(raw: Any) -> list[dict[str, Any]]:
+    """Extract stops from session-state itinerary (JSON string or dict)."""
+    if raw is None:
+        return []
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        stops = data.get("stops") if isinstance(data, dict) else None
+        return stops if isinstance(stops, list) else []
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return []
+
+
 def save_preference(
     place_id: str,
     place_name: str,
@@ -226,21 +328,7 @@ def save_preference(
     """
     uid = _user_id(tool_context)
     try:
-        embedding = _embed(f"{place_name} {city} {action}")
-        _mcp_tool("update-many", {
-            "database": HODARI_DB,
-            "collection": "interactions",
-            "filter": {"user_id": uid, "place_id": place_id},
-            "update": {
-                "$set": {
-                    "place_name": place_name,
-                    "city": city,
-                    "action": action,
-                    "embedding": embedding,
-                }
-            },
-            "upsert": True,
-        })
+        _persist_preference_sync(uid, place_id, place_name, city, action)
         return f"Saved: {action} → {place_name} ({city})"
     except Exception as exc:
         logger.warning("save_preference failed: %s", exc)
@@ -263,6 +351,11 @@ def find_similar_preferences(
         tool_context: Injected by ADK.
     """
     uid = _user_id(tool_context)
+    profile = tool_context.state.get("user_profile") or {}
+    if profile.get("new_user"):
+        logger.info("find_similar_preferences skipped: new user has no history")
+        return []
+
     try:
         q_embedding = _embed(query)
         pipeline = [
