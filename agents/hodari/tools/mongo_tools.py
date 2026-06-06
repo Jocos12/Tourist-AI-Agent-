@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 from typing import Any, Optional
 
@@ -54,9 +55,21 @@ def _init_session() -> str:
     return sid
 
 
+def _record_substep(name: str, started: float) -> None:
+    if os.getenv("HODARI_PROFILING", "1").lower() in ("0", "false", "no"):
+        return
+    try:
+        from ..telemetry import record_substep
+
+        record_substep(name, time.perf_counter() - started)
+    except Exception:
+        pass
+
+
 def _mcp_tool(tool_name: str, arguments: dict) -> dict:
     """Call a MongoDB MCP tool; auto-renews the session on expiry (once)."""
     global _session_id
+    started = time.perf_counter()
     if not _session_id:
         _session_id = _init_session()
 
@@ -98,6 +111,7 @@ def _mcp_tool(tool_name: str, arguments: dict) -> dict:
 
         if "error" in payload:
             raise RuntimeError(f"MCP error calling '{tool_name}': {payload['error']}")
+        _record_substep(f"mongo_mcp:{tool_name}", started)
         return payload.get("result", {})
 
     raise RuntimeError(f"No response data from MCP tool '{tool_name}'")
@@ -139,6 +153,7 @@ def _embed(text: str) -> list[float]:
     import google.auth
     import google.auth.transport.requests as _tr
 
+    started = time.perf_counter()
     creds, detected_project = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
@@ -161,6 +176,7 @@ def _embed(text: str) -> list[float]:
         timeout=10,
     )
     resp.raise_for_status()
+    _record_substep("vertex_embed:text-embedding-004", started)
     return resp.json()["predictions"][0]["embeddings"]["values"]
 
 

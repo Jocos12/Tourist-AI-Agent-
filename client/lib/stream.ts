@@ -2,7 +2,8 @@ import type { StreamChunk } from './types'
 
 const TOOL_LABELS: Record<string, string> = {
   load_user_profile: 'Loading your profile',
-  hodari_pipeline: 'Starting your matchday plan',
+  map_control: 'Updating the map',
+  hodari_pipeline: 'Running place search (list or plan)',
 }
 
 const AGENT_LABELS: Record<string, string> = {
@@ -14,12 +15,12 @@ const AGENT_LABELS: Record<string, string> = {
 // Coarse milestones while hodari_pipeline runs inside AgentTool (inner events
 // are not streamed). Delays are from pipeline tool-call time, not wall-clock exact.
 const PIPELINE_MILESTONES: Array<{ atMs: number; agent: string; label: string }> = [
-  { atMs: 0, agent: 'pipeline_planning', label: 'Planning your trip' },
-  { atMs: 12_000, agent: 'pipeline_search', label: 'Searching nearby places' },
-  { atMs: 45_000, agent: 'pipeline_evaluate', label: 'Evaluating candidates' },
-  { atMs: 90_000, agent: 'pipeline_itinerary', label: 'Building your itinerary' },
-  { atMs: 120_000, agent: 'pipeline_routes', label: 'Calculating routes' },
-  { atMs: 135_000, agent: 'pipeline_present', label: 'Preparing recommendations' },
+  { atMs: 0, agent: 'pipeline_intent', label: 'Deciding: list discovery vs full plan' },
+  { atMs: 4_000, agent: 'pipeline_search', label: 'Searching Google Maps (live)' },
+  { atMs: 15_000, agent: 'pipeline_rank', label: 'Ranking & filtering candidates' },
+  { atMs: 35_000, agent: 'pipeline_itinerary', label: 'Building routed itinerary (if needed)' },
+  { atMs: 75_000, agent: 'pipeline_routes', label: 'Calculating travel legs' },
+  { atMs: 100_000, agent: 'pipeline_present', label: 'Preparing your answer' },
 ]
 
 function milestoneKey(m: { agent: string; label: string }) {

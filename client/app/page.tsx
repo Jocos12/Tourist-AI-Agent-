@@ -2,19 +2,78 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { ChatPanel } from '@/components/ChatPanel'
-import { MapView } from '@/components/MapView'
+import { MapView, type RouteInfo } from '@/components/MapView'
 import { ItineraryStack } from '@/components/ItineraryStack'
+import { PlaceStack } from '@/components/PlaceStack'
 import { VoiceButton } from '@/components/VoiceButton'
 import { VoiceOrb } from '@/components/VoiceOrb'
 import { CollapsedReply } from '@/components/CollapsedReply'
 import { PlaceDetailsPanel } from '@/components/PlaceDetailsPanel'
 import { streamChat, fetchSessionState } from '@/lib/stream'
+import { pinsFarFromUser, requestUserLocation } from '@/lib/geo'
+import {
+  applyMapActions,
+  parseMapActions,
+  shouldAttachGps,
+  type CustomRouteConfig,
+  type MapActionEffects,
+  type TravelMode,
+} from '@/lib/mapActions'
+import {
+  findPlaceIndexInText,
+  isKeepOnlyRequest,
+  isNamedKeepOnlyRequest,
+  isListPickRequest,
+  isNewSearchRequest,
+  isZoomFocusRequest,
+  resolvePlaceIndex,
+} from '@/lib/mapIntents'
 import { stripEmDashes } from '@/lib/text'
 import { speak, cancelSpeech, isSpeechOutputSupported } from '@/lib/voice'
 import { type ModelId } from '@/components/ModelSwitcher'
 import type { ChatMessage, Place, Itinerary, ItineraryStop, Theme } from '@/lib/types'
 
 function uid() { return Math.random().toString(36).slice(2) }
+
+/** User wants to see existing recommendations on the in-app map (not a new search). */
+function isMapShowRequest(text: string): boolean {
+  const t = text.toLowerCase()
+  if (/\b(on (the |this )?map|on your map|in the map)\b/.test(t)) return true
+  if (/\b(show|see|view|put|pin|display)\b/.test(t) && /\b(map|pins?|them|these|places)\b/.test(t)) return true
+  if (/\bwhere (are|is) (they|them|it)\b/.test(t)) return true
+  if (/\b(can't you|can you|could you).*\b(map|pins?)\b/.test(t)) return true
+  return false
+}
+
+function isHideLocationRequest(text: string): boolean {
+  const t = text.toLowerCase()
+  return /\b(hide|don't show|do not show|remove)\b.{0,30}\b(my )?(location|gps|position)\b/.test(t)
+}
+
+function wantsRouteFromUser(text: string): boolean {
+  const t = text.toLowerCase()
+  if (/\b(do not|don't|not)\b.{0,25}\b(route|from me|from my)\b/.test(t)) return false
+  if (/\b(without|ignore)\b.{0,15}\b(my (location|gps)|routing from me)\b/.test(t)) return false
+  return (
+    /\b(route|directions|how (do|to) (i )?get|how to go|plan my (route|way)|navigate)\b/.test(t)
+    || /\b(from my (location|actual location)|using my location|from where i am)\b/.test(t)
+    || /\b(go there|get there|show me how)\b/.test(t)
+    || /\bdistance\b/.test(t)
+    || /\broute from me\b/.test(t)
+  )
+}
+
+function parseCandidates(raw: unknown): Place[] | null {
+  try {
+    const str = typeof raw === 'string' ? raw : JSON.stringify(raw)
+    const clean = str.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim()
+    if (!clean || clean === '[]' || clean === '""') return null
+    const parsed = JSON.parse(clean) as Place[]
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null
+  } catch {
+    return null
+  }
+}
 
 const USER_ID = typeof window !== 'undefined'
   ? (localStorage.getItem('hodari_uid') ?? (() => {
@@ -26,6 +85,7 @@ function parseItinerary(raw: unknown): Itinerary | null {
   try {
     const str = typeof raw === 'string' ? raw : JSON.stringify(raw)
     const clean = str.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim()
+    if (!clean || clean === '""' || clean === '{}' || clean === '{"stops":[]}') return null
     const it = JSON.parse(clean) as Itinerary
     // Drop duplicate stops — the same place repeated (e.g. a min-2-stops fallback
     // clone). Keep the first occurrence; identical place_ids never make sense as
@@ -66,12 +126,31 @@ export default function HomePage() {
   const [selectedModel, setSelectedModel] = useState<ModelId>('gemini-2.5-flash')
   const [theme, setTheme] = useState<Theme>('dark')
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
-  const [detailsStop, setDetailsStop] = useState<ItineraryStop | null>(null)
+  const [routeFromUser, setRouteFromUser] = useState(false)
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null)
+  const [routeError, setRouteError] = useState<string | null>(null)
+  const [locationPending, setLocationPending] = useState(false)
+  const [mapZoomFocus, setMapZoomFocus] = useState(false)
+  const [showUserOnMap, setShowUserOnMap] = useState(true)
+  const [suppressGpsContext, setSuppressGpsContext] = useState(false)
+  const [customRoute, setCustomRoute] = useState<CustomRouteConfig | null>(null)
+  const [routeMode, setRouteMode] = useState<TravelMode>('WALK')
+  const [detailsPlace, setDetailsPlace] = useState<Place | null>(null)
   // Speak Hodari's replies aloud when the user spoke their message (speech-to-speech).
   const [speakReplies, setSpeakReplies] = useState(true)
   const [speechOutSupported, setSpeechOutSupported] = useState(false)
   const speakRepliesRef = useRef(true)
   const sessionId = useRef(uid())
+  /** User filtered to a single pin locally — don't let session poll restore the full list. */
+  const soloPlaceModeRef = useRef(false)
+  const appliedMapActionsRef = useRef('')
+  const placesRef = useRef(places)
+  const itineraryRef = useRef(itinerary)
+  const activeStopRef = useRef(activeStop)
+
+  useEffect(() => { placesRef.current = places }, [places])
+  useEffect(() => { itineraryRef.current = itinerary }, [itinerary])
+  useEffect(() => { activeStopRef.current = activeStop }, [activeStop])
 
   useEffect(() => { speakRepliesRef.current = speakReplies }, [speakReplies])
 
@@ -131,23 +210,143 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!navigator.geolocation) return
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => {},
-      { timeout: 8000 },
-    )
+    const apply = (pos: GeolocationPosition) =>
+      setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+    navigator.geolocation.getCurrentPosition(apply, () => {}, {
+      enableHighAccuracy: true,
+      timeout: 20_000,
+      maximumAge: 120_000,
+    })
+    const watchId = navigator.geolocation.watchPosition(apply, () => {}, {
+      enableHighAccuracy: true,
+      maximumAge: 60_000,
+    })
+    return () => navigator.geolocation.clearWatch(watchId)
   }, [])
+
+  const applyMapEffects = useCallback((effects: MapActionEffects) => {
+    if (effects.showUserOnMap !== undefined) setShowUserOnMap(effects.showUserOnMap)
+    if (effects.suppressGpsContext !== undefined) setSuppressGpsContext(effects.suppressGpsContext)
+    if (effects.mapOpen !== undefined) setMapOpen(effects.mapOpen)
+    if (effects.mapZoomFocus !== undefined) setMapZoomFocus(effects.mapZoomFocus)
+    if (effects.activeStop !== undefined) setActiveStop(effects.activeStop)
+    if (effects.places !== undefined) setPlaces(effects.places)
+    if (effects.clearItinerary) setItinerary(null)
+    if (effects.soloPlaceMode) soloPlaceModeRef.current = true
+    if (effects.routeFromUser !== undefined) setRouteFromUser(effects.routeFromUser)
+    if (effects.customRoute !== undefined) setCustomRoute(effects.customRoute)
+    if (effects.routeMode !== undefined) setRouteMode(effects.routeMode)
+    if (effects.routeFromUser || effects.customRoute) {
+      setRouteInfo(null)
+      setRouteError(null)
+    }
+    if (effects.customRoute === null && effects.routeFromUser === false) {
+      setRouteInfo(null)
+      setRouteError(null)
+    }
+  }, [])
+
+  const processSessionMapActions = useCallback((state: Record<string, unknown>) => {
+    const raw = state.map_actions
+    const payload = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '')
+    if (!payload || payload === '[]' || payload === '""' || payload === appliedMapActionsRef.current) {
+      return
+    }
+    const actions = parseMapActions(raw)
+    if (!actions.length) return
+    appliedMapActionsRef.current = payload
+    const effects = applyMapActions(actions, {
+      places: placesRef.current,
+      itinerary: itineraryRef.current,
+      activeStop: activeStopRef.current,
+    })
+    applyMapEffects(effects)
+  }, [applyMapEffects])
+
+  const ensureUserLocation = useCallback(async (): Promise<boolean> => {
+    if (userLocation) return true
+    setLocationPending(true)
+    const loc = await requestUserLocation()
+    setLocationPending(false)
+    if (loc) {
+      setUserLocation(loc)
+      return true
+    }
+    setRouteError('Allow location access in your browser (lock icon in the address bar), then tap Route from me again.')
+    return false
+  }, [userLocation])
 
   const handleSend = useCallback(async (text: string, opts?: { speak?: boolean }) => {
     cancelSpeech() // stop any in-flight reply the moment a new turn begins
     const wantSpeak = !!opts?.speak
 
-    const enriched = userLocation
+    if (isNewSearchRequest(text)) soloPlaceModeRef.current = false
+
+    if (isHideLocationRequest(text)) {
+      setShowUserOnMap(false)
+      setRouteFromUser(false)
+      setCustomRoute(null)
+      setRouteInfo(null)
+    }
+
+    const attachGps = shouldAttachGps(text, userLocation, suppressGpsContext)
+    const enriched = attachGps && userLocation
       ? `${text}\n[User location: ${userLocation.lat.toFixed(5)}, ${userLocation.lng.toFixed(5)}]`
       : text
 
     const userMsg: ChatMessage = { id: uid(), role: 'user', content: text }
     setMessages((prev) => [...prev, userMsg])
+
+    const visiblePlaces: Place[] = itinerary?.stops?.length
+      ? itinerary.stops.map((s) => ({ ...s, personalization_score: 0, categories: [] }))
+      : places
+
+    let mapOnlyReply: string | null = null
+
+    if (isZoomFocusRequest(text) || isListPickRequest(text)) {
+      const idx = resolvePlaceIndex(text, visiblePlaces, activeStop)
+      if (idx !== null) {
+        setActiveStop(idx)
+        setMapZoomFocus(true)
+        setMapOpen(true)
+        if (isZoomFocusRequest(text)) {
+          mapOnlyReply = `Centered the map on ${visiblePlaces[idx].name}. Tap Route from me for directions.`
+        }
+      }
+    }
+
+    if (isKeepOnlyRequest(text) || isNamedKeepOnlyRequest(text, visiblePlaces)) {
+      const idx = resolvePlaceIndex(text, visiblePlaces, activeStop)
+      if (idx !== null) {
+        const solo = visiblePlaces[idx]
+        setPlaces([solo])
+        setItinerary(null)
+        setActiveStop(0)
+        setMapZoomFocus(true)
+        setMapOpen(true)
+        soloPlaceModeRef.current = true
+        mapOnlyReply = `Showing only ${solo.name} on your map. Tap its card and Route from me when you're ready to go.`
+      }
+    }
+
+    if (isMapShowRequest(text)) setMapOpen(true)
+
+    // Pure map UI actions — don't call the agent (it may re-search and restore old pins).
+    if (mapOnlyReply && !wantsRouteFromUser(text)) {
+      setMessages((prev) => [
+        ...prev,
+        { id: uid(), role: 'assistant', content: mapOnlyReply },
+      ])
+      if (wantSpeak && speakRepliesRef.current) speak(mapOnlyReply)
+      return
+    }
+    const routeRequest = wantsRouteFromUser(text)
+    if (routeRequest) {
+      setRouteFromUser(true)
+      setMapOpen(true)
+      const idx = findPlaceIndexInText(text, places)
+      if (idx !== null) setActiveStop(idx)
+    }
     setLoading(true)
     setThinkingSteps([])
     setStreamingStarted(false)
@@ -174,23 +373,36 @@ export default function HomePage() {
         if (streamDone || earlyItinerarySet) break
         try {
           const s = await fetchSessionState(USER_ID, sessionId.current)
-          if (s.itinerary) {
+          if (s.intent_type === 'LIST_DISCOVERY') {
+            setItinerary(null)
+          }
+          if (s.itinerary && s.intent_type !== 'LIST_DISCOVERY') {
             const parsed = parseItinerary(s.itinerary)
             if (parsed) {
               earlyItinerarySet = true
               setItinerary(parsed)
+              setPlaces([])
               setActiveStop(0)
               setMapOpen(true)
+              if (!routeRequest) setRouteFromUser(false)
             }
           }
-          if (!earlyItinerarySet && s.candidates) {
-            try {
-              const raw = typeof s.candidates === 'string' ? s.candidates : JSON.stringify(s.candidates)
-              const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim()
-              setPlaces(JSON.parse(clean))
+          if (!earlyItinerarySet && s.candidates && !soloPlaceModeRef.current) {
+            const parsed = parseCandidates(s.candidates)
+            if (parsed) {
+              setPlaces(parsed)
+              setItinerary(null)
+              setMapZoomFocus(false)
               setMapOpen(true)
-            } catch { /* skip */ }
+              setActiveStop((prev) => prev ?? 0)
+              if (!routeRequest) {
+                setRouteFromUser(false)
+                setRouteInfo(null)
+              }
+            }
           }
+          processSessionMapActions(s)
+          if (s.suppress_gps_context === '1') setSuppressGpsContext(true)
         } catch { /* non-critical */ }
       }
     }
@@ -200,6 +412,14 @@ export default function HomePage() {
         if (chunk.type === 'thinking') {
           pipelineRan = true
           setThinkingSteps((prev) => [...prev, chunk.label])
+          if (chunk.agent === 'map_control') {
+            fetchSessionState(USER_ID, sessionId.current)
+              .then((s) => {
+                processSessionMapActions(s)
+                if (s.suppress_gps_context === '1') setSuppressGpsContext(true)
+              })
+              .catch(() => {})
+          }
           // Start polling session state as soon as planning begins (profile load or
           // pipeline), so map/cards can appear before the orchestrator finishes.
           const planningSignal =
@@ -234,26 +454,45 @@ export default function HomePage() {
         speak(stripEmDashes(assistantText))
       }
 
-      // Final fetch — picks up anything not caught by early polling.
-      // Only when the pipeline actually ran; follow-up chat keeps existing state.
-      if (pipelineRan && !earlyItinerarySet) {
+      // Final session fetch — map_control actions + pipeline/candidate hydration.
+      const wantsMap = isMapShowRequest(text)
+      try {
         const state = await fetchSessionState(USER_ID, sessionId.current)
-        if (state.candidates) {
-          try {
-            const raw = typeof state.candidates === 'string' ? state.candidates : JSON.stringify(state.candidates)
-            const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim()
-            setPlaces(JSON.parse(clean))
+        processSessionMapActions(state)
+        if (state.suppress_gps_context === '1') setSuppressGpsContext(true)
+        else if (state.suppress_gps_context === '') setSuppressGpsContext(false)
+
+        if ((pipelineRan && !earlyItinerarySet) || wantsMap) {
+          const intent = state.intent_type as string | undefined
+          const parsedCandidates = state.candidates ? parseCandidates(state.candidates) : null
+          const parsedItinerary =
+            state.itinerary && !earlyItinerarySet ? parseItinerary(state.itinerary) : null
+
+          if (parsedCandidates && (intent === 'LIST_DISCOVERY' || !parsedItinerary) && !soloPlaceModeRef.current) {
+            setPlaces(parsedCandidates)
+            setItinerary(null)
+            setMapZoomFocus(false)
             setMapOpen(true)
-          } catch { /* skip */ }
-        }
-        if (state.itinerary) {
-          const parsed = parseItinerary(state.itinerary)
-          if (parsed) {
-            setItinerary(parsed)
+            setActiveStop((prev) => prev ?? 0)
+          } else if (parsedItinerary && intent !== 'LIST_DISCOVERY') {
+            setItinerary(parsedItinerary)
+            setPlaces([])
+            setMapOpen(true)
             setActiveStop(0)
-            setMapOpen(true)
+            if (!routeRequest) setRouteFromUser(false)
           }
         }
+      } catch { /* non-critical */ }
+
+      if (routeRequest) {
+        let list = places
+        try {
+          const state = await fetchSessionState(USER_ID, sessionId.current)
+          const parsed = state.candidates ? parseCandidates(state.candidates) : null
+          if (parsed) list = parsed
+        } catch { /* use in-memory places */ }
+        const idx = findPlaceIndexInText(text, list)
+        if (idx !== null) setActiveStop(idx)
       }
     } catch (err) {
       console.error(err)
@@ -264,7 +503,37 @@ export default function HomePage() {
       setStreamingStarted(false)
       streamingStartedRef.current = false
     }
-  }, [userLocation])
+  }, [userLocation, places, itinerary, activeStop, suppressGpsContext, processSessionMapActions])
+
+  const handleMarkerClick = useCallback((index: number) => {
+    setActiveStop(index)
+    setMapZoomFocus(true)
+    setMapOpen(true)
+    const list = itinerary?.stops ?? places
+    const item = list[index]
+    if (item) setDetailsPlace(item as Place)
+    setCustomRoute(null)
+    setRouteFromUser(true)
+    setRouteInfo(null)
+    setRouteError(null)
+    void ensureUserLocation()
+  }, [places, itinerary, ensureUserLocation])
+
+  const handleRouteFromMe = useCallback(async (index: number) => {
+    setActiveStop(index)
+    setCustomRoute(null)
+    setRouteFromUser(true)
+    setRouteInfo(null)
+    setRouteError(null)
+    setMapOpen(true)
+    await ensureUserLocation()
+  }, [ensureUserLocation])
+
+  const handlePlaceAsk = useCallback((index: number, prompt: string) => {
+    setActiveStop(index)
+    setChatCollapsed(false)
+    handleSend(prompt)
+  }, [handleSend])
 
   const handleFeedback = useCallback(async (stopIndex: number, action: 'liked' | 'disliked') => {
     if (!itinerary) return
@@ -295,6 +564,19 @@ export default function HomePage() {
   const mapPlaces = itineraryStops
     ? itineraryStops.map((s) => ({ ...s, personalization_score: 0, categories: [] }))
     : places
+
+  const pinsMismatch =
+    showUserOnMap &&
+    !suppressGpsContext &&
+    !!userLocation &&
+    places.length > 0 &&
+    !itineraryStops &&
+    pinsFarFromUser(
+      userLocation,
+      places.map((p) => p.coordinates),
+    )
+
+  const routeActive = routeFromUser || !!customRoute
 
   const chatPanel = (
     <ChatPanel
@@ -374,20 +656,71 @@ export default function HomePage() {
             places={mapPlaces as Place[]}
             itinerary={itineraryStops}
             activeStopIndex={activeStop}
-            onMarkerClick={setActiveStop}
+            onMarkerClick={handleMarkerClick}
             userLocation={userLocation}
             theme={theme}
+            showUserLocation={showUserOnMap}
+            routeFromUser={routeFromUser}
+            customRoute={customRoute}
+            routeMode={routeMode}
+            onRouteInfo={setRouteInfo}
+            onRouteError={setRouteError}
+            zoomFocusOnActive={mapZoomFocus}
           />
+          {pinsMismatch && (
+            <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 max-w-md px-4 py-2 rounded-xl bg-surface/95 border border-gold/40 text-sm text-text backdrop-blur-md">
+              Pins look far from your GPS. Ask Hodari to search again in your city (e.g. &quot;find restaurants in Kampala near me&quot;).
+            </div>
+          )}
+          {routeActive && routeError && (
+            <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 max-w-lg px-4 py-2 rounded-xl bg-surface/95 border border-red-500/40 text-sm text-text2 backdrop-blur-md">
+              {routeError}
+            </div>
+          )}
+          {routeFromUser && locationPending && (
+            <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-full bg-surface/95 border border-border text-sm text-text2 backdrop-blur-md">
+              Getting your location…
+            </div>
+          )}
+          {routeActive && routeInfo && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-full bg-surface/95 border border-border shadow-lg text-sm text-text backdrop-blur-md pointer-events-none">
+              <span className="text-gold font-medium">{routeInfo.destinationName}</span>
+              <span className="text-text2">
+                {' · '}{routeInfo.distance}{' · '}{routeInfo.duration} from{' '}
+                {routeInfo.originLabel && routeInfo.originLabel !== 'you'
+                  ? routeInfo.originLabel
+                  : 'you'}
+              </span>
+            </div>
+          )}
+          {routeFromUser && !userLocation && !locationPending && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 max-w-md px-4 py-2 rounded-xl bg-surface/95 border border-gold/40 text-sm text-text2 backdrop-blur-md text-center">
+              Allow location in your browser, then tap <strong className="text-text">Route from me</strong> again.
+            </div>
+          )}
+          {!itineraryStops && places.length > 0 && (
+            <PlaceStack
+              places={places}
+              activeIndex={activeStop}
+              onSelect={handleMarkerClick}
+              onShowDetails={setDetailsPlace}
+              onRouteFromMe={handleRouteFromMe}
+              onAsk={handlePlaceAsk}
+              hasUserLocation={!!userLocation}
+              locationPending={locationPending}
+              leftOffset={chatCollapsed ? 0 : chatWidth}
+            />
+          )}
           {itineraryStops && itineraryStops.length > 0 && (
             <ItineraryStack
               stops={itineraryStops}
               activeIndex={activeStop}
-              onSelect={setActiveStop}
+              onSelect={handleMarkerClick}
               voiceSummary={itinerary?.voice_summary}
               onFeedback={handleFeedback}
               onSwap={handleSwap}
               onAsk={handleAsk}
-              onShowDetails={setDetailsStop}
+              onShowDetails={(stop) => setDetailsPlace(stop as Place)}
               leftOffset={chatCollapsed ? 0 : chatWidth}
             />
           )}
@@ -439,12 +772,12 @@ export default function HomePage() {
       <VoiceOrb />
 
       {/* ── In-app place details (Places API) ── */}
-      {detailsStop?.place_id && (
+      {detailsPlace?.place_id && (
         <PlaceDetailsPanel
-          placeId={detailsStop.place_id}
-          fallbackName={detailsStop.name}
-          fallbackMapsUrl={`https://www.google.com/maps/search/?api=1&query=${detailsStop.coordinates.lat},${detailsStop.coordinates.lng}&query_place_id=${encodeURIComponent(detailsStop.place_id)}`}
-          onClose={() => setDetailsStop(null)}
+          placeId={detailsPlace.place_id}
+          fallbackName={detailsPlace.name}
+          fallbackMapsUrl={`https://www.google.com/maps/search/?api=1&query=${detailsPlace.coordinates.lat},${detailsPlace.coordinates.lng}&query_place_id=${encodeURIComponent(detailsPlace.place_id)}`}
+          onClose={() => setDetailsPlace(null)}
         />
       )}
 

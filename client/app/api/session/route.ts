@@ -25,5 +25,8 @@ export async function GET(req: NextRequest) {
     plan: session?.state?.plan,
     candidates: session?.state?.candidates,
     itinerary: session?.state?.itinerary,
+    intent_type: session?.state?.intent_type,
+    map_actions: session?.state?.map_actions,
+    suppress_gps_context: session?.state?.suppress_gps_context,
   })
 }
