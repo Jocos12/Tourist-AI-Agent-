@@ -1,6 +1,13 @@
 import type { StreamChunk } from './types'
 
 const AGENT_LABELS: Record<string, string> = {
+  // Emitted when the orchestrator calls the gated planning pipeline as a tool.
+  // The pipeline's inner agents no longer stream their own events (AgentTool runs
+  // them in an isolated runner), so this single step is our signal that planning
+  // ran and the client should re-fetch candidates/itinerary from session state.
+  hodari_pipeline: 'Building your matchday plan',
+  // Kept for backward-compatibility with the old auto-transfer flow, where each
+  // sub-agent streamed its own events.
   planner_agent: 'Planning your trip',
   explorer_agent: 'Searching nearby places',
   itinerary_agent: 'Building your itinerary',
@@ -25,6 +32,12 @@ export async function* streamChat(
   const decoder = new TextDecoder()
   let buffer = ''
   const seenAgents = new Set<string>()
+  // ADK streams text as a sequence of `partial:true` deltas, then re-sends the
+  // WHOLE message once more as a single `partial:false` consolidation event.
+  // Appending both doubles the reply, so once we've streamed deltas we drop the
+  // consolidation. (Kept defensive: if a message ever arrives only as a single
+  // non-partial event, we still render it.)
+  let streamedText = false
 
   while (true) {
     const { done, value } = await reader.read()
@@ -68,7 +81,27 @@ export async function* streamChat(
 
         const parts = event?.content?.parts ?? []
         for (const part of parts) {
-          if (part.text) yield { type: 'text', text: part.text }
+          // The orchestrator gates the planning pipeline behind an explicit tool
+          // call (functionCall part). Surface it as one "thinking" step so the UI
+          // shows progress and knows to pull the itinerary from session state.
+          const fnName: string | undefined = part?.functionCall?.name
+          if (fnName && AGENT_LABELS[fnName]) {
+            if (!seenAgents.has(fnName)) {
+              seenAgents.add(fnName)
+              yield { type: 'thinking', agent: fnName, label: AGENT_LABELS[fnName] }
+            }
+            continue
+          }
+          if (part.text) {
+            if (event?.partial === true) {
+              streamedText = true
+              yield { type: 'text', text: part.text }
+            } else if (!streamedText) {
+              // Standalone (non-streamed) message — render it once.
+              yield { type: 'text', text: part.text }
+            }
+            // else: consolidated copy of already-streamed deltas — skip.
+          }
         }
       } catch {
         // non-JSON SSE line — skip

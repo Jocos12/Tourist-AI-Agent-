@@ -5,10 +5,14 @@ import { ChatPanel } from '@/components/ChatPanel'
 import { MapView } from '@/components/MapView'
 import { ItineraryStack } from '@/components/ItineraryStack'
 import { VoiceButton } from '@/components/VoiceButton'
+import { VoiceOrb } from '@/components/VoiceOrb'
+import { CollapsedReply } from '@/components/CollapsedReply'
+import { PlaceDetailsPanel } from '@/components/PlaceDetailsPanel'
 import { streamChat, fetchSessionState } from '@/lib/stream'
 import { stripEmDashes } from '@/lib/text'
+import { speak, cancelSpeech, isSpeechOutputSupported } from '@/lib/voice'
 import { type ModelId } from '@/components/ModelSwitcher'
-import type { ChatMessage, Place, Itinerary, Theme } from '@/lib/types'
+import type { ChatMessage, Place, Itinerary, ItineraryStop, Theme } from '@/lib/types'
 
 function uid() { return Math.random().toString(36).slice(2) }
 
@@ -55,10 +59,65 @@ export default function HomePage() {
   const [activeStop, setActiveStop] = useState<number | null>(null)
   const [mapOpen, setMapOpen] = useState(false)
   const [chatCollapsed, setChatCollapsed] = useState(false)
+  // Width of the map-open chat overlay. User-resizable via the drag handle.
+  // Kept compact by default so the map stays the focus; drag to widen.
+  const [chatWidth, setChatWidth] = useState(380)
+  const resizingRef = useRef(false)
   const [selectedModel, setSelectedModel] = useState<ModelId>('gemini-2.5-flash')
   const [theme, setTheme] = useState<Theme>('dark')
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [detailsStop, setDetailsStop] = useState<ItineraryStop | null>(null)
+  // Speak Hodari's replies aloud when the user spoke their message (speech-to-speech).
+  const [speakReplies, setSpeakReplies] = useState(true)
+  const [speechOutSupported, setSpeechOutSupported] = useState(false)
+  const speakRepliesRef = useRef(true)
   const sessionId = useRef(uid())
+
+  useEffect(() => { speakRepliesRef.current = speakReplies }, [speakReplies])
+
+  useEffect(() => {
+    setSpeechOutSupported(isSpeechOutputSupported())
+    const savedVoice = localStorage.getItem('hodari_speak')
+    if (savedVoice === '0') setSpeakReplies(false)
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem('hodari_speak', speakReplies ? '1' : '0')
+  }, [speakReplies])
+
+  useEffect(() => {
+    // Only honor a width the user explicitly set by dragging (new key, so the
+    // old auto-persisted default is ignored and the compact default applies).
+    const saved = Number(localStorage.getItem('hodari_chatw'))
+    if (saved >= 300 && saved <= 760) setChatWidth(saved)
+  }, [])
+
+  // Drag the chat panel's right edge to resize it. Width === pointer X since the
+  // panel is anchored to the left edge. Persisted only on release (not on every
+  // render) so the compact default isn't overwritten.
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    resizingRef.current = true
+    let latest = 380
+    const onMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return
+      const max = Math.min(760, window.innerWidth - 260)
+      latest = Math.max(320, Math.min(ev.clientX, max))
+      setChatWidth(latest)
+    }
+    const onUp = () => {
+      resizingRef.current = false
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      localStorage.setItem('hodari_chatw', String(latest))
+    }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
 
   useEffect(() => {
     const saved = localStorage.getItem('hodari_theme') as Theme | null
@@ -79,7 +138,10 @@ export default function HomePage() {
     )
   }, [])
 
-  const handleSend = useCallback(async (text: string) => {
+  const handleSend = useCallback(async (text: string, opts?: { speak?: boolean }) => {
+    cancelSpeech() // stop any in-flight reply the moment a new turn begins
+    const wantSpeak = !!opts?.speak
+
     const enriched = userLocation
       ? `${text}\n[User location: ${userLocation.lat.toFixed(5)}, ${userLocation.lng.toFixed(5)}]`
       : text
@@ -101,10 +163,13 @@ export default function HomePage() {
     // and reset the user's selected stop mid-conversation).
     let pipelineRan = false
 
-    // Polls session state every 3 s once the itinerary agent fires — renders
-    // cards without waiting for the full Orchestrator response.
+    // Polls session state every 3 s once the pipeline fires — renders cards as
+    // soon as the pipeline commits its result, well before the Orchestrator
+    // finishes presenting (and saving preferences). The loop exits early on
+    // streamDone/earlyItinerarySet, so the high cap just covers slow pipelines
+    // (live Maps + multi-step reasoning can take a couple of minutes).
     const pollForItinerary = async () => {
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 120; i++) {
         await new Promise((r) => setTimeout(r, 3000))
         if (streamDone || earlyItinerarySet) break
         try {
@@ -135,7 +200,9 @@ export default function HomePage() {
         if (chunk.type === 'thinking') {
           pipelineRan = true
           setThinkingSteps((prev) => [...prev, chunk.label])
-          if (chunk.agent === 'itinerary_agent' && !earlyItinerarySet) {
+          // 'hodari_pipeline' is the gated-tool signal; 'itinerary_agent' is the
+          // legacy auto-transfer signal. Either means the plan is being built.
+          if ((chunk.agent === 'itinerary_agent' || chunk.agent === 'hodari_pipeline') && !earlyItinerarySet) {
             pollForItinerary()
           }
         } else {
@@ -156,6 +223,11 @@ export default function HomePage() {
       }
 
       streamDone = true
+
+      // Speech-to-speech: if the user spoke their message, speak the reply back.
+      if (wantSpeak && speakRepliesRef.current && assistantText.trim()) {
+        speak(stripEmDashes(assistantText))
+      }
 
       // Final fetch — picks up anything not caught by early polling.
       // Only when the pipeline actually ran; follow-up chat keeps existing state.
@@ -213,6 +285,7 @@ export default function HomePage() {
     handleSend(prompt)
   }, [handleSend])
 
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant') ?? null
   const itineraryStops = itinerary?.stops ?? null
   const mapPlaces = itineraryStops
     ? itineraryStops.map((s) => ({ ...s, personalization_score: 0, categories: [] }))
@@ -238,8 +311,25 @@ export default function HomePage() {
   )
 
   const voiceBar = (
-    <div className="flex justify-center py-3 border-t border-border bg-bg/80 shrink-0">
-      <VoiceButton onTranscript={handleSend} disabled={loading} />
+    <div className="flex justify-center items-center gap-3 py-3 border-t border-border bg-bg/80 shrink-0">
+      <VoiceButton onTranscript={(t) => handleSend(t, { speak: true })} disabled={loading} />
+      {speechOutSupported && (
+        <button
+          onClick={() => setSpeakReplies((v) => { const nv = !v; if (!nv) cancelSpeech(); return nv })}
+          title={speakReplies ? 'Mute spoken replies' : 'Speak replies aloud'}
+          className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors border ${
+            speakReplies ? 'border-gold/50 text-gold bg-gold/10' : 'border-border text-text3 hover:text-text2'
+          }`}
+        >
+          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">
+            {speakReplies ? (
+              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.03v8.06A4.5 4.5 0 0016.5 12zM14 3.23v2.06a7 7 0 010 13.42v2.06a9 9 0 000-17.54z" />
+            ) : (
+              <path d="M3 9v6h4l5 5V4L7 9H3zm16.59 3L22 9.41 20.59 8 18 10.59 15.41 8 14 9.41 16.59 12 14 14.59 15.41 16 18 13.41 20.59 16 22 14.59 19.41 12z" />
+            )}
+          </svg>
+        </button>
+      )}
     </div>
   )
 
@@ -292,7 +382,8 @@ export default function HomePage() {
               onFeedback={handleFeedback}
               onSwap={handleSwap}
               onAsk={handleAsk}
-              leftOffset={chatCollapsed ? 0 : 420}
+              onShowDetails={setDetailsStop}
+              leftOffset={chatCollapsed ? 0 : chatWidth}
             />
           )}
         </div>
@@ -300,24 +391,31 @@ export default function HomePage() {
 
       {/* ── Chat overlay: shown when map is open and not collapsed ── */}
       {mapOpen && !chatCollapsed && (
-        <div className="absolute top-0 bottom-0 left-0 z-10 flex flex-col w-[420px] bg-bg/95 backdrop-blur-md border-r border-border animate-slide-in-right">
+        <div
+          className="absolute top-0 bottom-0 left-0 z-10 flex flex-col bg-bg/95 backdrop-blur-md border-r border-border animate-slide-in-right"
+          style={{ width: chatWidth }}
+        >
           {chatPanel}
           {voiceBar}
+          {/* Drag handle — resize the panel */}
+          <div
+            onMouseDown={startResize}
+            title="Drag to resize"
+            className="absolute top-0 right-0 h-full w-2 cursor-col-resize group z-20"
+          >
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 h-16 w-1 rounded-full bg-border group-hover:bg-gold/70 transition-colors" />
+          </div>
         </div>
       )}
 
-      {/* ── Expand-chat button: shown when map is open and chat is collapsed ── */}
+      {/* ── Collapsed chat: live response window + voice ── */}
       {mapOpen && chatCollapsed && (
-        <button
-          onClick={() => setChatCollapsed(false)}
-          title="Open chat"
-          className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-bg/90 backdrop-blur-sm border border-border rounded-xl px-3 py-2 text-text2 hover:text-gold hover:border-gold/40 transition-all"
-        >
-          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">
-            <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
-          </svg>
-          <span className="font-mono text-[10px] tracking-wider uppercase">Chat</span>
-        </button>
+        <CollapsedReply
+          content={lastAssistant?.content ?? null}
+          loading={loading}
+          streaming={loading && streamingStarted}
+          onOpen={() => setChatCollapsed(false)}
+        />
       )}
 
       {/* ── Close map button ── */}
@@ -330,6 +428,19 @@ export default function HomePage() {
             <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
           </svg>
         </button>
+      )}
+
+      {/* ── Audio-reactive voice bubble (self-hides when idle) ── */}
+      <VoiceOrb />
+
+      {/* ── In-app place details (Places API) ── */}
+      {detailsStop?.place_id && (
+        <PlaceDetailsPanel
+          placeId={detailsStop.place_id}
+          fallbackName={detailsStop.name}
+          fallbackMapsUrl={`https://www.google.com/maps/search/?api=1&query=${detailsStop.coordinates.lat},${detailsStop.coordinates.lng}&query_place_id=${encodeURIComponent(detailsStop.place_id)}`}
+          onClose={() => setDetailsStop(null)}
+        />
       )}
 
     </div>

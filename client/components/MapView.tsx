@@ -81,7 +81,7 @@ export function MapView({ places, itinerary, activeStopIndex, onMarkerClick, use
     ?? { lat: 41.385, lng: 2.173 } // fallback: Barcelona
 
   return (
-    <APIProvider apiKey={API_KEY} libraries={['geometry']}>
+    <APIProvider apiKey={API_KEY} libraries={['geometry', 'places']}>
       <Map
         defaultCenter={defaultCenter}
         defaultZoom={markers.length > 0 ? 14 : 13}

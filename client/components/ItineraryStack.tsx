@@ -11,6 +11,7 @@ interface Props {
   onFeedback?: (stopIndex: number, action: 'liked' | 'disliked') => void
   onSwap?: (stopIndex: number) => void
   onAsk?: (stopIndex: number, prompt: string) => void
+  onShowDetails?: (stop: ItineraryStop) => void
   leftOffset?: number
 }
 
@@ -94,9 +95,10 @@ function askChips(stop: ItineraryStop, i: number): { label: string; prompt: stri
   ]
 }
 
-export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onFeedback, onSwap, onAsk, leftOffset = 0 }: Props) {
+export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onFeedback, onSwap, onAsk, onShowDetails, leftOffset = 0 }: Props) {
   const [ratings, setRatings] = useState<Record<string, 'liked' | 'disliked'>>({})
   const [expanded, setExpanded] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
 
   function handleFeedback(e: React.MouseEvent, i: number, action: 'liked' | 'disliked') {
     e.stopPropagation()
@@ -125,10 +127,38 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
 
   return (
     <div className="absolute bottom-0 right-0 p-4" style={{ left: leftOffset }}>
+      {collapsed ? (
+        /* ── Collapsed: a single pill to bring the itinerary back ── */
+        <button
+          onClick={() => setCollapsed(false)}
+          title="Show itinerary"
+          className="glass rounded-xl px-4 py-3 flex items-center gap-2 text-text2 hover:text-gold transition-colors animate-fade-up"
+        >
+          <span className="font-mono text-xs tracking-wider uppercase">
+            Itinerary · {stops.length} {stops.length === 1 ? 'stop' : 'stops'}
+          </span>
+          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" /></svg>
+        </button>
+      ) : (
+      <>
+      {/* ── Header: title + collapse toggle ── */}
+      <div className="flex items-center justify-between mb-2.5 max-w-lg">
+        <span className="font-mono text-[11px] tracking-widest uppercase text-text3">
+          Your plan · {stops.length} {stops.length === 1 ? 'stop' : 'stops'}
+        </span>
+        <button
+          onClick={() => setCollapsed(true)}
+          title="Hide itinerary"
+          className="glass p-1.5 rounded-lg text-text3 hover:text-gold transition-all"
+        >
+          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" /></svg>
+        </button>
+      </div>
+
       {/* Voice summary — its own glassy pill */}
       {voiceSummary && (
-        <div className="glass rounded-xl px-4 py-2.5 mb-3 max-w-2xl animate-fade-up">
-          <p className="font-mono text-[11px] text-text2 italic tracking-wide line-clamp-2">
+        <div className="glass rounded-xl px-4 py-3 mb-3 max-w-2xl animate-fade-up">
+          <p className="font-mono text-[12.5px] text-text2 italic tracking-wide line-clamp-2">
             <span className="text-gold not-italic mr-2">›</span>
             {voiceSummary}
           </p>
@@ -136,13 +166,8 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
       )}
 
       {/* ── Expandable detail sheet (full text for the active stop) ───────── */}
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
-        style={{ gridTemplateRows: isOpen ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden">
-          {active && (
-            <div className="glass rounded-2xl max-h-[42vh] overflow-y-auto px-4 pt-3.5 pb-4 mb-3 max-w-md scrollbar-hide">
+      {isOpen && active && (
+            <div className="glass rounded-2xl max-h-[42vh] overflow-y-auto px-5 pt-4 pb-4 mb-3 max-w-md scrollbar-hide animate-fade-up">
               {/* Header: stop label + name + collapse */}
               <div className="flex items-start justify-between gap-3 mb-2">
                 <div className="min-w-0">
@@ -150,7 +175,7 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
                     Stop {(activeIndex ?? 0) + 1}
                     {active.arrival_time && <span className="text-text3 ml-2">{active.arrival_time}</span>}
                   </span>
-                  <p className="font-display text-base font-semibold leading-snug text-text mt-0.5">
+                  <p className="font-display text-lg font-semibold leading-snug text-text mt-0.5">
                     {active.name}
                   </p>
                 </div>
@@ -166,10 +191,10 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
               {/* Meta chips: duration + travel */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2">
                 {active.duration_at_stop && (
-                  <span className="font-mono text-[10px] text-text2">⏱ {active.duration_at_stop}</span>
+                  <span className="font-mono text-[11px] text-text2">⏱ {active.duration_at_stop}</span>
                 )}
                 {active.travel_from_prev && (
-                  <span className="font-mono text-[10px] text-text3">
+                  <span className="font-mono text-[11px] text-text3">
                     {active.travel_from_prev.distance} · {active.travel_from_prev.duration} from previous
                   </span>
                 )}
@@ -179,13 +204,13 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
               {active.address && (
                 <div className="flex items-start gap-1.5 text-text2 mb-3">
                   <span className="text-gold/70 mt-0.5"><PinIcon /></span>
-                  <span className="text-[11px] leading-relaxed font-sans">{active.address}</span>
+                  <span className="text-[12.5px] leading-relaxed font-sans">{active.address}</span>
                 </div>
               )}
 
               {/* Full rationale — no clamp */}
               {active.rationale && (
-                <p className="text-[12.5px] text-text leading-relaxed font-sans mb-3">
+                <p className="text-sm text-text leading-relaxed font-sans mb-3">
                   {active.rationale}
                 </p>
               )}
@@ -209,17 +234,27 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
                 </div>
               )}
 
-              {/* Footer: maps link + feedback */}
+              {/* Footer: in-app details + feedback */}
               <div className="flex items-center justify-between border-t border-border/40 pt-2.5">
-                <a
-                  href={mapsUrl(active)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase text-text3 hover:text-gold transition-colors"
-                >
-                  <ExternalIcon />
-                  Open in Maps
-                </a>
+                {onShowDetails ? (
+                  <button
+                    onClick={() => onShowDetails(active)}
+                    className="flex items-center gap-1.5 font-mono text-[11px] tracking-wider uppercase text-gold hover:text-gold-light transition-colors"
+                  >
+                    <ExternalIcon />
+                    View details
+                  </button>
+                ) : (
+                  <a
+                    href={mapsUrl(active)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase text-text3 hover:text-gold transition-colors"
+                  >
+                    <ExternalIcon />
+                    Open in Maps
+                  </a>
+                )}
 
                 {onFeedback && (
                   <div className="flex items-center gap-1">
@@ -245,9 +280,7 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
                 )}
               </div>
             </div>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* ── Itinerary cards — separate glassy boxes ──────────────────────── */}
       <div className="overflow-x-auto flex gap-3 pb-1 scrollbar-hide">
@@ -264,11 +297,11 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
               onClick={() => handleCardClick(i)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardClick(i) } }}
               style={{ animationDelay: `${i * 70}ms` }}
-              className={`glass ${isActive ? 'glass-active' : ''} flex-shrink-0 w-60 rounded-2xl overflow-hidden text-left cursor-pointer transition-transform duration-300 hover:-translate-y-0.5 relative group animate-fade-up`}
+              className={`glass ${isActive ? 'glass-active' : ''} flex-shrink-0 w-64 rounded-2xl overflow-hidden text-left cursor-pointer transition-transform duration-300 hover:-translate-y-0.5 relative group animate-fade-up`}
             >
               {/* Background stop number watermark */}
               <span
-                className={`absolute right-2 bottom-1 font-display font-bold text-[64px] leading-none pointer-events-none select-none ${isActive ? 'text-gold/[0.10]' : 'text-text/[0.06]'}`}
+                className={`absolute right-2 bottom-1 font-display font-bold text-[72px] leading-none pointer-events-none select-none ${isActive ? 'text-gold/[0.10]' : 'text-text/[0.06]'}`}
               >
                 {i + 1}
               </span>
@@ -276,12 +309,12 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
               <div className="h-full p-3.5">
                 {/* Stop index + time row */}
                 <div className="flex items-center justify-between mb-2">
-                  <span className={`font-mono text-[10px] tracking-widest uppercase ${isActive ? 'text-gold' : 'text-text3'}`}>
+                  <span className={`font-mono text-[11px] tracking-widest uppercase ${isActive ? 'text-gold' : 'text-text3'}`}>
                     Stop {i + 1}
                   </span>
                   <div className="flex items-center gap-1.5">
                     {stop.arrival_time && (
-                      <span className="font-mono text-[10px] text-text2">{stop.arrival_time}</span>
+                      <span className="font-mono text-[11px] text-text2">{stop.arrival_time}</span>
                     )}
                     {/* Expand affordance on the active card */}
                     {isActive && (
@@ -294,24 +327,24 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
                 <div className="border-t border-dashed border-border mb-2" />
 
                 {/* Place name */}
-                <p className={`font-display text-sm font-semibold leading-snug mb-1.5 ${isActive ? 'text-text' : 'text-text/80'}`}>
+                <p className={`font-display text-[15px] font-semibold leading-snug mb-1.5 ${isActive ? 'text-text' : 'text-text/80'}`}>
                   {stop.name}
                 </p>
 
                 {/* Duration + travel */}
                 <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-2">
                   {stop.duration_at_stop && (
-                    <span className="font-mono text-[10px] text-text2">{stop.duration_at_stop}</span>
+                    <span className="font-mono text-[11px] text-text2">{stop.duration_at_stop}</span>
                   )}
                   {stop.travel_from_prev && (
-                    <span className="font-mono text-[10px] text-text3">
+                    <span className="font-mono text-[11px] text-text3">
                       {stop.travel_from_prev.distance} · {stop.travel_from_prev.duration}
                     </span>
                   )}
                 </div>
 
                 {/* Rationale (preview — full text lives in the expanded sheet) */}
-                <p className="text-[11px] text-text2 leading-relaxed line-clamp-2 font-sans mb-3">
+                <p className="text-[13px] text-text2 leading-relaxed line-clamp-3 font-sans mb-3">
                   {stop.rationale}
                 </p>
 
@@ -362,6 +395,8 @@ export function ItineraryStack({ stops, activeIndex, onSelect, voiceSummary, onF
           )
         })}
       </div>
+      </>
+      )}
     </div>
   )
 }
