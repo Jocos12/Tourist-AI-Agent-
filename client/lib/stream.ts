@@ -1,16 +1,29 @@
 import type { StreamChunk } from './types'
 
+const TOOL_LABELS: Record<string, string> = {
+  load_user_profile: 'Loading your profile',
+  hodari_pipeline: 'Starting your matchday plan',
+}
+
 const AGENT_LABELS: Record<string, string> = {
-  // Emitted when the orchestrator calls the gated planning pipeline as a tool.
-  // The pipeline's inner agents no longer stream their own events (AgentTool runs
-  // them in an isolated runner), so this single step is our signal that planning
-  // ran and the client should re-fetch candidates/itinerary from session state.
-  hodari_pipeline: 'Building your matchday plan',
-  // Kept for backward-compatibility with the old auto-transfer flow, where each
-  // sub-agent streamed its own events.
   planner_agent: 'Planning your trip',
   explorer_agent: 'Searching nearby places',
   itinerary_agent: 'Building your itinerary',
+}
+
+// Coarse milestones while hodari_pipeline runs inside AgentTool (inner events
+// are not streamed). Delays are from pipeline tool-call time, not wall-clock exact.
+const PIPELINE_MILESTONES: Array<{ atMs: number; agent: string; label: string }> = [
+  { atMs: 0, agent: 'pipeline_planning', label: 'Planning your trip' },
+  { atMs: 12_000, agent: 'pipeline_search', label: 'Searching nearby places' },
+  { atMs: 45_000, agent: 'pipeline_evaluate', label: 'Evaluating candidates' },
+  { atMs: 90_000, agent: 'pipeline_itinerary', label: 'Building your itinerary' },
+  { atMs: 120_000, agent: 'pipeline_routes', label: 'Calculating routes' },
+  { atMs: 135_000, agent: 'pipeline_present', label: 'Preparing recommendations' },
+]
+
+function milestoneKey(m: { agent: string; label: string }) {
+  return `${m.agent}:${m.label}`
 }
 
 export async function* streamChat(
@@ -31,19 +44,68 @@ export async function* streamChat(
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  const seenAgents = new Set<string>()
-  // ADK streams text as a sequence of `partial:true` deltas, then re-sends the
-  // WHOLE message once more as a single `partial:false` consolidation event.
-  // Appending both doubles the reply, so once we've streamed deltas we drop the
-  // consolidation. (Kept defensive: if a message ever arrives only as a single
-  // non-partial event, we still render it.)
+  const seenSteps = new Set<string>()
   let streamedText = false
+  let pipelineStartedAt: number | null = null
+  let nextMilestoneIdx = 0
+
+  function* dueMilestones(): Generator<StreamChunk> {
+    if (pipelineStartedAt === null) return
+    const elapsed = Date.now() - pipelineStartedAt
+    while (
+      nextMilestoneIdx < PIPELINE_MILESTONES.length &&
+      elapsed >= PIPELINE_MILESTONES[nextMilestoneIdx].atMs
+    ) {
+      const m = PIPELINE_MILESTONES[nextMilestoneIdx++]
+      const key = milestoneKey(m)
+      if (!seenSteps.has(key)) {
+        seenSteps.add(key)
+        yield { type: 'thinking', agent: m.agent, label: m.label }
+      }
+    }
+  }
+
+  function* emitToolStep(name: string): Generator<StreamChunk> {
+    const label = TOOL_LABELS[name]
+    if (!label || seenSteps.has(name)) return
+    seenSteps.add(name)
+    yield { type: 'thinking', agent: name, label }
+    if (name === 'hodari_pipeline') {
+      pipelineStartedAt = Date.now()
+      yield* dueMilestones()
+    }
+  }
+
+  function* emitAgentStep(author: string): Generator<StreamChunk> {
+    const label = AGENT_LABELS[author]
+    if (!label || seenSteps.has(author)) return
+    seenSteps.add(author)
+    yield { type: 'thinking', agent: author, label }
+  }
 
   while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+    yield* dueMilestones()
 
-    buffer += decoder.decode(value, { stream: true })
+    const readPromise = reader.read()
+    const timeoutPromise = pipelineStartedAt !== null
+      ? new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+          const wait = PIPELINE_MILESTONES[nextMilestoneIdx]?.atMs ?? Infinity
+          const elapsed = Date.now() - (pipelineStartedAt as number)
+          const delay = Math.max(0, wait - elapsed)
+          setTimeout(() => resolve({ done: false, value: undefined as unknown as Uint8Array }), delay)
+        })
+      : null
+
+    const result = timeoutPromise
+      ? await Promise.race([readPromise, timeoutPromise])
+      : await readPromise
+
+    if (result.done) break
+
+    // Timeout wake-up with no new bytes — loop again to emit due milestones.
+    if (!result.value) continue
+
+    buffer += decoder.decode(result.value, { stream: true })
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
 
@@ -57,7 +119,6 @@ export async function* streamChat(
         const author = event?.author as string | undefined
         if (!author) continue
 
-        // ADK error events — surface them as readable text
         const errMsg: string | undefined = event.errorMessage || event.error
         if (errMsg) {
           if (errMsg.includes('prepayment credits are depleted') || errMsg.includes('prepay')) {
@@ -71,25 +132,15 @@ export async function* streamChat(
         }
 
         if (author !== 'hodari') {
-          // Emit each sub-agent once as a thinking step
-          if (!seenAgents.has(author) && AGENT_LABELS[author]) {
-            seenAgents.add(author)
-            yield { type: 'thinking', agent: author, label: AGENT_LABELS[author] }
-          }
+          yield* emitAgentStep(author)
           continue
         }
 
         const parts = event?.content?.parts ?? []
         for (const part of parts) {
-          // The orchestrator gates the planning pipeline behind an explicit tool
-          // call (functionCall part). Surface it as one "thinking" step so the UI
-          // shows progress and knows to pull the itinerary from session state.
           const fnName: string | undefined = part?.functionCall?.name
-          if (fnName && AGENT_LABELS[fnName]) {
-            if (!seenAgents.has(fnName)) {
-              seenAgents.add(fnName)
-              yield { type: 'thinking', agent: fnName, label: AGENT_LABELS[fnName] }
-            }
+          if (fnName) {
+            yield* emitToolStep(fnName)
             continue
           }
           if (part.text) {
@@ -97,10 +148,8 @@ export async function* streamChat(
               streamedText = true
               yield { type: 'text', text: part.text }
             } else if (!streamedText) {
-              // Standalone (non-streamed) message — render it once.
               yield { type: 'text', text: part.text }
             }
-            // else: consolidated copy of already-streamed deltas — skip.
           }
         }
       } catch {

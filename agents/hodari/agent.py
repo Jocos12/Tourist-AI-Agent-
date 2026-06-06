@@ -4,11 +4,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from google.adk.agents import LlmAgent, SequentialAgent
-from google.adk.tools.agent_tool import AgentTool
 from .sub_agents.planner import planner_agent
 from .sub_agents.explorer import explorer_agent
 from .sub_agents.itinerary import itinerary_agent
-from .tools.mongo_tools import load_user_profile, save_preference
+from .tools.mongo_tools import load_user_profile
+from .tools.pipeline_tool import HodariPipelineTool
 
 # Planner → Explorer → Itinerary, guaranteed in order.
 # This description is what the orchestrator's LLM reads when deciding whether to
@@ -86,11 +86,8 @@ STEP 4 — Present the result.
   voice_summary as a friendly italic closing line. Then keep the conversation open (for example,
   offer to adjust the timing or swap a stop).
 
-STEP 5 — Save preferences (after presenting).
-  For each stop in the itinerary, call save_preference with:
-    place_id = the stop's place_id, place_name = the stop's name,
-    city = the city (extract from the address), action = "recommended".
-  This builds the user's taste profile for future personalisation.
+  Preference saves run automatically in the background after the pipeline completes. Do NOT call
+  save_preference for recommended stops.
 
 ═══ FOLLOW-UPS (stay in CONVERSATION) ═══
 
@@ -115,5 +112,5 @@ root_agent = LlmAgent(
     name="hodari",
     description="Hodari — tourist AI assistant for the 2026 FIFA World Cup",
     instruction=ORCHESTRATOR_INSTRUCTION,
-    tools=[load_user_profile, save_preference, AgentTool(agent=_pipeline)],
+    tools=[load_user_profile, HodariPipelineTool(agent=_pipeline)],
 )

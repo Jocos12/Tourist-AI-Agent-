@@ -200,9 +200,14 @@ export default function HomePage() {
         if (chunk.type === 'thinking') {
           pipelineRan = true
           setThinkingSteps((prev) => [...prev, chunk.label])
-          // 'hodari_pipeline' is the gated-tool signal; 'itinerary_agent' is the
-          // legacy auto-transfer signal. Either means the plan is being built.
-          if ((chunk.agent === 'itinerary_agent' || chunk.agent === 'hodari_pipeline') && !earlyItinerarySet) {
+          // Start polling session state as soon as planning begins (profile load or
+          // pipeline), so map/cards can appear before the orchestrator finishes.
+          const planningSignal =
+            chunk.agent === 'hodari_pipeline' ||
+            chunk.agent === 'load_user_profile' ||
+            chunk.agent.startsWith('pipeline_') ||
+            chunk.agent === 'itinerary_agent'
+          if (planningSignal && !earlyItinerarySet) {
             pollForItinerary()
           }
         } else {
