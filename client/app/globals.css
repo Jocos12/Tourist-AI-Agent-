@@ -1,0 +1,215 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme tokens (RGB channels — enables opacity modifiers like bg-bg/50) ── */
+:root {
+  --color-bg:       250 248 245;
+  --color-surface:  255 255 255;
+  --color-surface2: 254 243 199;
+  --color-surface3: 253 230 138;
+  --color-text:     26 26 46;
+  --color-text2:    75 85 99;
+  --color-text3:    107 114 128;
+  --color-border:   229 229 229;
+}
+
+html.dark {
+  --color-bg:       15 23 42;
+  --color-surface:  20 30 52;
+  --color-surface2: 30 41 59;
+  --color-surface3: 51 65 85;
+  --color-text:     248 250 252;
+  --color-text2:    203 213 225;
+  --color-text3:    100 116 139;
+  --color-border:   51 65 85;
+}
+
+/* ── Gradient backgrounds ─────────────────────────────────────────────────── */
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: linear-gradient(135deg, #FAF8F5 0%, #FDF6E3 100%);
+  color: rgb(var(--color-text));
+  transition: background 500ms ease, color 300ms ease;
+}
+
+html.dark body {
+  background: #0F172A;
+}
+
+/* ── Custom scrollbar ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--color-border)); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--color-surface3)); }
+
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── Ticket perforation ───────────────────────────────────────────────────── */
+.ticket-perf {
+  border-left: 2px dashed rgb(var(--color-border));
+}
+
+/* ── Gold pulse (active state) ────────────────────────────────────────────── */
+@keyframes gold-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 106, 0, 0); }
+  50%       { box-shadow: 0 0 0 6px rgba(245, 106, 0, 0.08); }
+}
+
+.gold-ring {
+  animation: gold-pulse 2s ease-in-out infinite;
+}
+
+/* ── Thinking ring (reasoning spinner) ───────────────────────────────────── */
+@keyframes orb-spin {
+  to { transform: rotate(360deg); }
+}
+
+.thinking-ring {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(245, 158, 11, 0.18);
+  border-top-color: #F59E0B;
+  border-right-color: rgba(245, 158, 11, 0.55);
+  animation: orb-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+/* ── Scanning dots ────────────────────────────────────────────────────────── */
+@keyframes scan {
+  0%, 60%, 100% { opacity: 0.15; transform: translateY(0); }
+  30%           { opacity: 1;    transform: translateY(-3px); }
+}
+
+.scan-dot:nth-child(1) { animation: scan 1.2s ease-in-out infinite 0ms; }
+.scan-dot:nth-child(2) { animation: scan 1.2s ease-in-out infinite 150ms; }
+.scan-dot:nth-child(3) { animation: scan 1.2s ease-in-out infinite 300ms; }
+
+/* ── Markdown prose styles (used in AI message bubbles) ─────────────────── */
+.prose-hodari p { font-size: 0.875rem; line-height: 1.65; margin-bottom: 0.6rem; }
+.prose-hodari p:last-child { margin-bottom: 0; }
+.prose-hodari strong { color: rgb(var(--color-text)); font-weight: 600; }
+.prose-hodari em { color: rgb(var(--color-text2)); font-style: italic; }
+
+.prose-hodari ul { margin: 0.5rem 0; padding: 0; list-style: none; }
+.prose-hodari ul > li { display: flex; gap: 0.5rem; font-size: 0.875rem; line-height: 1.6; margin-bottom: 0.3rem; color: rgb(var(--color-text)); }
+.prose-hodari ul > li > .bullet { color: rgba(245, 106, 0, 0.55); flex-shrink: 0; font-size: 1em; line-height: 1.6; }
+.prose-hodari ul > li:last-child { margin-bottom: 0; }
+
+.prose-hodari ol { margin: 0.5rem 0; padding-left: 1.25rem; list-style: decimal; }
+.prose-hodari ol > li { font-size: 0.875rem; line-height: 1.6; margin-bottom: 0.3rem; color: rgb(var(--color-text)); }
+.prose-hodari ol > li > .bullet { display: none; }
+.prose-hodari ol > li:last-child { margin-bottom: 0; }
+
+.prose-hodari h1, .prose-hodari h2, .prose-hodari h3 {
+  font-weight: 600;
+  color: rgb(var(--color-text));
+  margin-top: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+.prose-hodari h1 { font-size: 1rem; }
+.prose-hodari h2 { font-size: 0.9375rem; }
+.prose-hodari h3 { font-size: 0.875rem; color: #F59E0B; font-weight: 500; }
+
+.prose-hodari code {
+  font-size: 0.75rem;
+  background: rgb(var(--color-surface2));
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  color: rgba(245, 158, 11, 0.85);
+  border: 1px solid rgb(var(--color-border));
+}
+.prose-hodari blockquote {
+  border-left: 2px solid rgba(245, 158, 11, 0.3);
+  padding-left: 0.75rem;
+  font-style: italic;
+  color: rgb(var(--color-text2));
+  margin: 0.5rem 0;
+}
+.prose-hodari hr {
+  border: none;
+  border-top: 1px solid rgb(var(--color-border));
+  margin: 0.75rem 0;
+}
+.prose-hodari a { color: #F59E0B; text-decoration: none; }
+.prose-hodari a:hover { text-decoration: underline; }
+
+/* ── Glassmorphism — frosted boxes that float over the map ────────────────── */
+.glass {
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow: 0 24px 60px -24px rgba(15, 23, 42, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+html.dark .glass {
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.70), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.glass-active {
+  border-color: rgba(245, 158, 11, 0.62);
+  box-shadow: 0 22px 54px -18px rgba(245, 158, 11, 0.44), 0 0 0 1px rgba(245, 158, 11, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.26);
+}
+
+.hero-grid {
+  background-image:
+    linear-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.045) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(circle at center, black, transparent 72%);
+}
+
+html.dark .hero-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+}
+
+.skeleton-shine::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.52), transparent);
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* ── Streaming caret (blinks at the end of a generating reply) ───────────── */
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+.stream-caret {
+  display: inline-block;
+  width: 7px;
+  height: 0.95em;
+  margin-left: 3px;
+  vertical-align: -2px;
+  border-radius: 1px;
+  background: #F59E0B;
+  animation: caret-blink 1s steps(1, end) infinite;
+}
+
+/* ── User location dot ────────────────────────────────────────────────────── */
+@keyframes location-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(66, 133, 244, 0.5); }
+  60%      { box-shadow: 0 0 0 9px rgba(66, 133, 244, 0); }
+}
+
+.user-location-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4285F4;
+  border: 2.5px solid white;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  animation: location-pulse 1.8s ease-in-out infinite;
+}

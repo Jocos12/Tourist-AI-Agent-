@@ -1,0 +1,13 @@
+{
+  "name": "Hodari — Global Tourist AI",
+  "short_name": "Hodari",
+  "description": "AI-powered tourist assistant for grounded trip planning anywhere",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0C0B0A",
+  "theme_color": "#0C0C0E",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

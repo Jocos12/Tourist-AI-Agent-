@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Hodari">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0C0B0A"/>
+      <stop offset="100%" stop-color="#1E1C14"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <text
+    x="256"
+    y="348"
+    text-anchor="middle"
+    fill="#E8A020"
+    font-size="320"
+    font-weight="900"
+    font-style="italic"
+    font-family="Georgia, 'Times New Roman', serif"
+  >H</text>
+</svg>
