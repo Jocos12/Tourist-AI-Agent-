@@ -16,7 +16,8 @@ const config: Config = {
         border:   'rgb(var(--color-border)   / <alpha-value>)',
         // Fixed accent colors — same in both themes
         gold:       { DEFAULT: '#F56A00', light: '#FF8C2F', dim: '#7A3500' },
-        green:      '#00C47A',
+        green:      { DEFAULT: '#00C47A', dim: '#0A4A36' },
+        danger:     { DEFAULT: '#FF5A57', dim: '#7A1F1D' },
         brand:      { DEFAULT: '#F56A00', dark: '#C44A00' },
       },
       fontFamily: {
