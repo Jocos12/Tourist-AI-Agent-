@@ -16,6 +16,9 @@ interface Props {
   locationFallbackUsed: boolean
   onLocateMe: () => void
   onClose: () => void
+  onExpand?: () => void
+  onCollapse?: () => void
+  isExpanded?: boolean
   onFeedback?: (stopIndex: number, action: 'liked' | 'disliked') => void
   onSwap?: (stopIndex: number) => void
   totalCostEstimate?: number
@@ -45,6 +48,9 @@ export function MapView({
   locationFallbackUsed,
   onLocateMe,
   onClose,
+  onExpand,
+  onCollapse,
+  isExpanded = false,
   onFeedback,
   onSwap,
   totalCostEstimate,
@@ -90,8 +96,32 @@ export function MapView({
   }, [])
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[2rem] border border-border bg-white shadow-2xl shadow-navy/10">
-      <div className="relative h-[calc(100%-120px)] min-h-0">
+    <div className={`flex h-full flex-col overflow-hidden bg-[#FDF8F0] dark:bg-[#1A1612] ${
+      isExpanded ? '' : 'rounded-[2rem] border border-amber-100 shadow-2xl shadow-navy/10 dark:border-gray-800'
+    }`}>
+      <div className="flex items-center justify-between border-b border-amber-100 bg-white px-4 py-2 dark:border-gray-800 dark:bg-gray-900">
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-200">🗺 Map View</span>
+        <div className="flex items-center gap-2">
+          {!isExpanded && (
+            <button
+              type="button"
+              onClick={onExpand}
+              className="rounded-full border border-amber-300 px-3 py-1 text-xs text-amber-600 transition-all hover:bg-amber-50 dark:border-amber-600 dark:text-amber-400 dark:hover:bg-amber-900/30"
+            >
+              ⛶ Expand
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-amber-300 px-3 py-1 text-xs text-amber-600 transition-all hover:bg-amber-50 dark:border-amber-600 dark:text-amber-400 dark:hover:bg-amber-900/30"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      <div className="relative min-h-0 flex-1">
         <APIProvider apiKey={mapsApiKey} libraries={['places']}>
           <Map
             defaultCenter={defaultCenter}
@@ -168,15 +198,15 @@ export function MapView({
           </Map>
         </APIProvider>
 
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute left-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-white/95 text-lg font-semibold text-text shadow-lg backdrop-blur transition hover:border-gold hover:text-gold"
-          title="Close map"
-          aria-label="Close map"
-        >
-          x
-        </button>
+        {isExpanded && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="absolute left-4 top-4 z-50 rounded-full border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-700 shadow-lg transition-all hover:bg-amber-50 dark:border-amber-600 dark:bg-gray-900 dark:text-amber-300 dark:hover:bg-amber-900/30"
+          >
+            ← Back to chat
+          </button>
+        )}
 
         {locating && (
           <div className="absolute left-16 top-4 z-20 flex items-center gap-2 rounded-full border border-border bg-white/95 px-3 py-2 text-sm text-text2 shadow-lg backdrop-blur">
@@ -192,8 +222,8 @@ export function MapView({
         )}
       </div>
 
-      <div className="h-[120px] border-t border-border bg-white">
-        <div className="flex h-full gap-3 overflow-x-auto px-4 py-3 scrollbar-hide">
+      <div className="border-t border-amber-100 bg-white dark:border-gray-800 dark:bg-gray-900">
+        <div className="flex gap-3 overflow-x-auto px-4 py-3 scrollbar-hide">
           {resolvedStops.map((stop, index) => {
             const metric = stopMetrics[metricKey(stop, index)]
             const active = activeStopIndex === index
@@ -209,37 +239,36 @@ export function MapView({
                     onMarkerClick(index)
                   }
                 }}
-                className={`min-w-[270px] cursor-pointer rounded-2xl border bg-white p-3 text-left shadow-sm transition hover:-translate-y-0.5 ${
-                  active ? 'border-gold ring-2 ring-gold/15' : 'border-border hover:border-gold/60'
+                className={`w-56 flex-shrink-0 cursor-pointer rounded-xl border bg-[#FDF8F0] p-3 text-left transition hover:-translate-y-0.5 dark:bg-gray-800 ${
+                  active ? 'border-amber-300 ring-2 ring-amber-400/15 dark:border-amber-700' : 'border-amber-100 hover:border-amber-300 dark:border-gray-700 dark:hover:border-amber-700'
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gold">Stop {index + 1}</p>
-                    <p className="mt-1 truncate text-sm font-semibold text-text">{stop.name}</p>
+                    <p className="text-xs font-semibold uppercase text-amber-700 dark:text-amber-400">Stop {index + 1}</p>
+                    <p className="mt-1 truncate text-sm font-medium text-gray-900 dark:text-white">{stop.name}</p>
                   </div>
-                  <span className="shrink-0 rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[11px] font-medium text-gold">
-                    {metric?.label ?? 'calculating...'}
+                  <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    {metric?.duration ?? '...'}
                   </span>
                 </div>
-                <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-text3">
-                  <span>{metric?.arrivalTime ?? stop.arrival_time ?? 'arrival soon'}</span>
-                  <span className="truncate">{stop.address}</span>
-                </div>
-                <div className="mt-3 flex items-center gap-1">
+                <p className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{stop.address}</p>
+                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{metric?.label ?? 'calculating route...'}</p>
+                <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{metric?.arrivalTime ?? stop.arrival_time ?? 'arrival soon'}</p>
+                <div className="mt-2 flex items-center gap-2">
                   <SmallAction label="Like" onClick={(event) => { event.stopPropagation(); onFeedback?.(index, 'liked') }}>Like</SmallAction>
                   <SmallAction label="Dislike" onClick={(event) => { event.stopPropagation(); onFeedback?.(index, 'disliked') }}>No</SmallAction>
                   <button
                     type="button"
                     onClick={(event) => { event.stopPropagation(); window.open(buildDirectionsUrl(userLocation, stop), '_blank', 'noopener,noreferrer') }}
-                    className="ml-auto rounded-full border border-gold/50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold hover:bg-[#FEF3C7]"
+                    className="ml-auto text-xs font-medium text-amber-600 dark:text-amber-400"
                   >
-                    Get directions
+                    Directions
                   </button>
                   <button
                     type="button"
                     onClick={(event) => { event.stopPropagation(); onSwap?.(index) }}
-                    className="rounded-full border border-border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-text2 hover:border-gold hover:text-gold"
+                    className="text-xs font-medium text-gray-500 hover:text-amber-600 dark:text-gray-400 dark:hover:text-amber-400"
                   >
                     Swap
                   </button>
@@ -248,12 +277,12 @@ export function MapView({
             )
           })}
 
-          <div className="min-w-[220px] rounded-2xl border border-gold/40 bg-[#FFFBEB] p-3 shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gold">Summary</p>
-            <div className="mt-2 space-y-1 text-sm text-text">
-              <p>Total distance: <span className="font-semibold">{summary?.distance ?? 'TBD'}</span></p>
-              <p>Total time: <span className="font-semibold">{summary?.duration ?? 'TBD'}</span></p>
-              <p>Cost: <span className="font-semibold">{cost}</span></p>
+          <div className="flex w-48 flex-shrink-0 flex-col justify-center rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+            <p className="mb-2 text-xs font-semibold uppercase text-amber-700 dark:text-amber-400">Summary</p>
+            <div className="space-y-1 text-sm text-gray-700 dark:text-gray-200">
+              <p>📍 {summary?.distance ?? 'TBD'}</p>
+              <p>⏱ {summary?.duration ?? 'TBD'}</p>
+              <p className="mt-1 font-semibold text-amber-700 dark:text-amber-400">💰 {cost}</p>
             </div>
           </div>
         </div>
@@ -462,7 +491,7 @@ function SmallAction({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="flex h-7 min-w-7 items-center justify-center rounded-full border border-border px-2 text-[10px] font-semibold hover:border-gold hover:bg-[#FEF3C7]"
+      className="text-xs font-medium text-gray-600 hover:text-amber-600 dark:text-gray-300 dark:hover:text-amber-400"
     >
       {children}
     </button>

@@ -10,6 +10,12 @@ import { type ModelId } from '@/components/ModelSwitcher'
 import type { ChatMessage, ItineraryStop, Place, Theme } from '@/lib/types'
 
 function uid() { return Math.random().toString(36).slice(2) }
+function getTime() {
+  return new Date().toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 const INITIAL_CONVERSATION_ID = 'initial-conversation'
 const DEFAULT_WORLD_CUP_STADIUM = { lat: 40.8136, lng: -74.0745 }
 
@@ -59,6 +65,7 @@ export default function HomePage() {
   const [places, setPlaces] = useState<Place[]>([])
   const [itineraryStops, setItineraryStops] = useState<ItineraryStop[]>([])
   const [mapOpen, setMapOpen] = useState(false)
+  const [mapExpanded, setMapExpanded] = useState(false)
   const [voiceSummary, setVoiceSummary] = useState('')
   const [totalCostEstimate, setTotalCostEstimate] = useState<number | undefined>(undefined)
   const [activeStopIndex, setActiveStopIndex] = useState<number | null>(null)
@@ -150,7 +157,7 @@ export default function HomePage() {
       setMapOpen(true)
     }
 
-    const userMsg: ChatMessage = { id: uid(), role: 'user', content: text }
+    const userMsg: ChatMessage = { id: uid(), role: 'user', content: text, createdAt: Date.now(), timestamp: getTime() }
     if (!options?.silentUserMessage) {
       setMessages((prev) => [...prev, userMsg])
     }
@@ -191,6 +198,7 @@ export default function HomePage() {
       setPlaces([])
       setItineraryStops([])
       setMapOpen(false)
+      setMapExpanded(false)
       setVoiceSummary('')
       setTotalCostEstimate(undefined)
       setActiveStopIndex(null)
@@ -198,6 +206,7 @@ export default function HomePage() {
 
     let assistantText = ''
     const assistantId = uid()
+    const assistantTimestamp = getTime()
 
     try {
       for await (const chunk of streamChat(text, userId, sessionId.current, userLocation, options)) {
@@ -227,14 +236,21 @@ export default function HomePage() {
           setMessages((prev) => {
             const existing = prev.find((m) => m.id === assistantId)
             if (existing) return prev.map((m) => m.id === assistantId ? { ...m, content: clean } : m)
-            return [...prev, { id: assistantId, role: 'assistant', content: clean }]
+            return [...prev, { id: assistantId, role: 'assistant', content: clean, createdAt: Date.now(), timestamp: assistantTimestamp }]
           })
           setConversations((prev) =>
             prev.map((conversation) => {
               if (conversation.id !== conversationId) return conversation
 
-              const assistantMessage: ChatMessage = { id: assistantId, role: 'assistant', content: clean }
-              const existing = conversation.messages.find((message) => message.id === assistantId)
+              const previousAssistantMessage = conversation.messages.find((message) => message.id === assistantId)
+              const assistantMessage: ChatMessage = {
+                id: assistantId,
+                role: 'assistant',
+                content: clean,
+                createdAt: previousAssistantMessage?.createdAt ?? Date.now(),
+                timestamp: previousAssistantMessage?.timestamp ?? assistantTimestamp,
+              }
+              const existing = previousAssistantMessage
               return {
                 ...conversation,
                 messages: existing
@@ -248,7 +264,7 @@ export default function HomePage() {
       }
     } catch (err) {
       console.error(err)
-      setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: 'Something went wrong. Please try again.' }])
+      setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: 'Something went wrong. Please try again.', createdAt: Date.now(), timestamp: getTime() }])
     } finally {
       setLoading(false)
       setStreamingStarted(false)
@@ -295,6 +311,7 @@ export default function HomePage() {
     setPlaces([])
     setItineraryStops([])
     setMapOpen(false)
+    setMapExpanded(false)
     setVoiceSummary('')
     setTotalCostEstimate(undefined)
     setActiveStopIndex(null)
@@ -311,6 +328,7 @@ export default function HomePage() {
     setPlaces([])
     setItineraryStops([])
     setMapOpen(false)
+    setMapExpanded(false)
     setVoiceSummary('')
     setTotalCostEstimate(undefined)
     setActiveStopIndex(null)
@@ -328,27 +346,31 @@ export default function HomePage() {
   const shouldShowMap = mapOpen && (places.length > 0 || itineraryStops.length > 0)
 
   return (
-    <div className="relative min-h-screen w-screen overflow-hidden bg-bg text-text">
-      <motion.aside
-        className="fixed inset-y-0 left-0 z-30 hidden border-r border-[#E5E5E5] bg-white text-text md:flex"
-        animate={{ width: sidebarCollapsed ? 56 : 260 }}
-        transition={{ duration: 0.22, ease: 'easeOut' }}
-      >
+    <div className="relative min-h-screen w-screen overflow-hidden bg-bg text-text dark:bg-gray-950 dark:text-white">
+      <AnimatePresence>
+        {!mapExpanded && (
+          <motion.aside
+            className="fixed inset-y-0 left-0 z-30 hidden border-r border-[#E5E5E5] bg-white text-text dark:border-gray-800 dark:bg-gray-900 dark:text-white md:flex"
+            animate={{ width: sidebarCollapsed ? 56 : 260, opacity: 1, x: 0 }}
+            initial={{ opacity: 0, x: -20 }}
+            exit={{ opacity: 0, x: -20 }}
+            transition={{ duration: 0.22, ease: 'easeOut' }}
+          >
         <div className="flex h-full w-full flex-col overflow-hidden p-2">
           <div className={`flex gap-2 px-1 py-1.5 ${sidebarCollapsed ? 'flex-col items-center' : 'items-center'}`}>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-text">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-gray-900 dark:text-white">
               H
             </div>
             {!sidebarCollapsed && (
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">Hodari</p>
+                <p className="truncate text-sm font-medium text-gray-900 dark:text-white">Hodari</p>
               </div>
             )}
             {!sidebarCollapsed && (
               <button
                 type="button"
                 onClick={() => searchInputRef.current?.focus()}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text2 transition hover:bg-[#FEF3C7] hover:text-text"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-600 transition hover:bg-amber-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-amber-900/20 dark:hover:text-white"
                 title="Search chats"
               >
                 <SearchIcon />
@@ -357,7 +379,7 @@ export default function HomePage() {
             <button
               type="button"
               onClick={() => setSidebarCollapsed((value) => !value)}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text2 transition hover:bg-[#FEF3C7] hover:text-text"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-600 transition hover:bg-amber-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-amber-900/20 dark:hover:text-white"
               title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
               <SidebarIcon collapsed={sidebarCollapsed} />
@@ -371,7 +393,7 @@ export default function HomePage() {
                 setSidebarCollapsed(false)
                 requestAnimationFrame(() => searchInputRef.current?.focus())
               }}
-              className="mt-2 flex h-9 w-full items-center justify-center rounded-lg text-text2 transition hover:bg-[#FEF3C7] hover:text-text"
+              className="mt-2 flex h-9 w-full items-center justify-center rounded-lg text-gray-600 transition hover:bg-amber-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-amber-900/20 dark:hover:text-white"
               title="Search chats"
             >
               <SearchIcon />
@@ -381,7 +403,7 @@ export default function HomePage() {
           <motion.button
             type="button"
             onClick={handleNewChat}
-            className={`group mt-2 flex h-9 items-center gap-2 rounded-lg border-l-2 border-transparent px-2 text-sm text-text2 transition hover:border-gold hover:bg-[#FEF3C7]/60 hover:text-text ${
+            className={`group mt-2 flex h-9 items-center gap-2 rounded-lg border-l-2 border-transparent px-2 text-sm text-gray-600 transition hover:border-amber-400 hover:bg-amber-50 hover:text-gray-900 dark:text-gray-400 dark:hover:border-amber-500 dark:hover:bg-amber-900/20 dark:hover:text-white ${
               sidebarCollapsed ? 'justify-center' : ''
             }`}
             title="New chat"
@@ -395,7 +417,7 @@ export default function HomePage() {
           {!sidebarCollapsed && (
             <>
               <div className="mt-3 px-1">
-                <label className="flex h-9 items-center gap-2 rounded-full border border-[#E5E5E5] bg-white px-3 text-text2 shadow-sm transition focus-within:border-gold focus-within:text-text focus-within:shadow-[0_0_0_3px_rgba(245,158,11,0.12)]">
+                <label className="flex h-9 items-center gap-2 rounded-full border border-[#E5E5E5] bg-white px-3 text-gray-600 shadow-sm transition focus-within:border-amber-400 focus-within:text-gray-900 focus-within:shadow-[0_0_0_3px_rgba(245,158,11,0.12)] dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 dark:focus-within:border-amber-500 dark:focus-within:text-white">
                   <SearchIcon />
                   <input
                     ref={searchInputRef}
@@ -403,14 +425,14 @@ export default function HomePage() {
                     onChange={(event) => setSearchQuery(event.target.value)}
                     type="search"
                     placeholder="Search chats"
-                    className="min-w-0 flex-1 bg-transparent text-sm text-text outline-none placeholder:text-text3"
+                    className="min-w-0 flex-1 bg-transparent text-sm text-gray-900 outline-none placeholder:text-gray-400 dark:text-white dark:placeholder:text-gray-500"
                   />
                 </label>
               </div>
-              <p className="mt-5 px-2 text-xs text-text3">Recents</p>
+              <p className="mt-5 px-2 text-xs text-gray-400 dark:text-gray-500">Recents</p>
               <div className="mt-1 flex-1 overflow-y-auto">
                 {visibleConversations.length === 0 ? (
-                  <p className="px-2 py-2 text-xs leading-5 text-text3">
+                  <p className="px-2 py-2 text-xs leading-5 text-gray-400 dark:text-gray-500">
                     {searchQuery.trim() ? 'No chats found.' : 'Your chats will appear here.'}
                   </p>
                 ) : (
@@ -423,29 +445,29 @@ export default function HomePage() {
                         type="button"
                         onClick={() => handleSelectConversation(conversation)}
                         className={`relative block w-full overflow-hidden rounded-lg px-2 py-2 text-left text-sm transition ${
-                          active ? 'bg-[#FEF3C7] text-text' : 'text-text2 hover:text-text'
+                          active ? 'bg-amber-50 text-gray-900 dark:bg-amber-900/20 dark:text-white' : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'
                         }`}
                         initial={{ opacity: 0, y: 4 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.18 }}
-                        whileHover={{ x: 2, backgroundColor: '#FEF3C7' }}
+                        whileHover={{ x: 2 }}
                         title={conversation.title}
                       >
                         <span className="relative z-10 block truncate">{conversation.title}</span>
-                        <span className="relative z-10 mt-0.5 block truncate text-[11px] text-text3">{preview}</span>
+                        <span className="relative z-10 mt-0.5 block truncate text-[11px] text-gray-400 dark:text-gray-500">{preview}</span>
                       </motion.button>
                     )
                   })
                 )}
               </div>
 
-              <div className="mt-2 flex items-center gap-2 border-t border-[#E5E5E5] px-2 py-3">
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-text text-xs font-medium text-bg">
+              <div className="mt-2 flex items-center gap-2 border-t border-[#E5E5E5] px-2 py-3 dark:border-gray-800">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-900 text-xs font-medium text-white dark:bg-white dark:text-gray-900">
                   Y
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">You</p>
-                  <span className="inline-flex rounded-full bg-white px-1.5 py-0.5 text-[11px] text-text3 ring-1 ring-border">
+                  <p className="truncate text-sm font-medium text-gray-900 dark:text-white">You</p>
+                  <span className="inline-flex rounded-full bg-white px-1.5 py-0.5 text-[11px] text-gray-400 ring-1 ring-border dark:bg-gray-900 dark:text-gray-500 dark:ring-gray-700">
                     Free
                   </span>
                 </div>
@@ -455,42 +477,50 @@ export default function HomePage() {
 
           {sidebarCollapsed && (
             <div className="mt-auto flex justify-center pb-1">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-text text-xs font-medium text-bg" title="You · Free">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-900 text-xs font-medium text-white dark:bg-white dark:text-gray-900" title="You · Free">
                 Y
               </div>
             </div>
           )}
         </div>
-      </motion.aside>
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
-      <div className={`fixed inset-y-0 right-0 z-10 flex ${sidebarCollapsed ? 'md:left-[56px]' : 'md:left-[260px]'} left-0`}>
-        <motion.main
-          className={`relative z-10 flex min-h-screen w-full flex-col px-4 transition-[width] duration-300 ease-out ${
-            shouldShowMap ? 'md:w-[320px] md:shrink-0' : 'md:flex-1 md:px-8'
-          }`}
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: 'easeOut' }}
-        >
-          <ChatPanel
-            messages={messages}
-            loading={loading}
-            thinkingSteps={thinkingSteps}
-            streamingStarted={streamingStarted}
-            onSend={handleSend}
-            onVoiceTranscribe={handleVoiceTranscribe}
-            selectedModel={selectedModel}
-            onModelChange={setSelectedModel}
-            theme={theme}
-            onToggleTheme={() => setTheme((t) => t === 'dark' ? 'light' : 'dark')}
-          />
-        </motion.main>
+      <div className={`fixed inset-y-0 right-0 z-10 flex ${mapExpanded ? 'left-0' : `${sidebarCollapsed ? 'md:left-[56px]' : 'md:left-[260px]'} left-0`}`}>
+        <AnimatePresence>
+          {!mapExpanded && (
+            <motion.main
+              key="chat-panel"
+              className={`relative z-10 flex min-h-screen w-full flex-col transition-[width] duration-300 ease-out ${
+                shouldShowMap ? 'md:w-[320px] md:shrink-0' : 'md:flex-1'
+              }`}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+            >
+              <ChatPanel
+                messages={messages}
+                loading={loading}
+                thinkingSteps={thinkingSteps}
+                streamingStarted={streamingStarted}
+                onSend={handleSend}
+                onVoiceTranscribe={handleVoiceTranscribe}
+                selectedModel={selectedModel}
+                onModelChange={setSelectedModel}
+                theme={theme}
+                onToggleTheme={() => setTheme((t) => t === 'dark' ? 'light' : 'dark')}
+              />
+            </motion.main>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence>
           {shouldShowMap && (
             <motion.section
               key="map-panel"
-              className="hidden min-w-0 flex-1 p-4 pl-0 md:block"
+              className={mapExpanded ? 'min-w-0 flex-1' : 'hidden min-w-0 flex-1 p-4 pl-0 md:block'}
               initial={{ x: 420, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: 420, opacity: 0 }}
@@ -506,7 +536,13 @@ export default function HomePage() {
                   locating={locatingLocation}
                   locationFallbackUsed={locationFallbackUsed}
                   onLocateMe={requestUserLocation}
-                  onClose={() => setMapOpen(false)}
+                  onClose={() => {
+                    setMapOpen(false)
+                    setMapExpanded(false)
+                  }}
+                  onExpand={() => setMapExpanded(true)}
+                  onCollapse={() => setMapExpanded(false)}
+                  isExpanded={mapExpanded}
                   onFeedback={handleFeedback}
                   onSwap={handleSwap}
                   totalCostEstimate={totalCostEstimate}
