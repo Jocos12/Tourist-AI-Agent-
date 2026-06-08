@@ -1,6 +1,6 @@
 # Hodari — UI Overhaul Sprint (2 days)
 
-**Owner / Engineer:** Pacifique (you) — the only person who has built the system end-to-end so far.
+**Owner / Engineer:** Pacifique.
 **Goal:** A heavy, deliberate UI upgrade across login, saved preferences, the two AI interaction modes (chat + voice), a new community page, and a compact in-chat map layout — **without touching the backend** and **without AI slop**.
 
 > Read this whole file before you write a single line of code. If anything is unclear, comment on the GitHub issue for your stream and tag the Engineer. Do not guess on backend behavior.
