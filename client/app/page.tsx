@@ -81,6 +81,13 @@ const USER_ID = typeof window !== 'undefined'
     })())
   : 'anon'
 
+interface HistoryItem {
+  id: string
+  title: string
+  updatedAt: number
+  messages: ChatMessage[]
+}
+
 function parseItinerary(raw: unknown): Itinerary | null {
   try {
     const str = typeof raw === 'string' ? raw : JSON.stringify(raw)
@@ -110,6 +117,8 @@ function parseItinerary(raw: unknown): Itinerary | null {
 
 export default function HomePage() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([])
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [thinkingSteps, setThinkingSteps] = useState<string[]>([])
   const [streamingStarted, setStreamingStarted] = useState(false)
@@ -124,7 +133,11 @@ export default function HomePage() {
   const [chatWidth, setChatWidth] = useState(380)
   const resizingRef = useRef(false)
   const [selectedModel, setSelectedModel] = useState<ModelId>('gemini-2.5-flash')
-  const [theme, setTheme] = useState<Theme>('dark')
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === 'undefined') return 'light'
+    const saved = localStorage.getItem('hodari_theme')
+    return saved === 'dark' ? 'dark' : 'light'
+  })
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
   const [routeFromUser, setRouteFromUser] = useState(false)
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null)
@@ -158,7 +171,39 @@ export default function HomePage() {
     setSpeechOutSupported(isSpeechOutputSupported())
     const savedVoice = localStorage.getItem('hodari_speak')
     if (savedVoice === '0') setSpeakReplies(false)
+
+    try {
+      const savedHistory = localStorage.getItem('hodari_history')
+      const parsed = savedHistory ? JSON.parse(savedHistory) as HistoryItem[] : []
+      if (Array.isArray(parsed)) setHistoryItems(parsed.slice(0, 20))
+    } catch {
+      setHistoryItems([])
+    } finally {
+      setHistoryLoaded(true)
+    }
   }, [])
+
+  useEffect(() => {
+    if (!historyLoaded) return
+    localStorage.setItem('hodari_history', JSON.stringify(historyItems.slice(0, 20)))
+  }, [historyItems, historyLoaded])
+
+  useEffect(() => {
+    if (!messages.length) return
+    const firstUserMessage = messages.find((message) => message.role === 'user') ?? messages[0]
+    const title = firstUserMessage.content.replace(/\s+/g, ' ').trim().slice(0, 56) || 'Untitled chat'
+    const id = sessionId.current
+
+    setHistoryItems((prev) => {
+      const nextItem: HistoryItem = {
+        id,
+        title,
+        updatedAt: Date.now(),
+        messages,
+      }
+      return [nextItem, ...prev.filter((item) => item.id !== id)].slice(0, 20)
+    })
+  }, [messages])
 
   useEffect(() => {
     localStorage.setItem('hodari_speak', speakReplies ? '1' : '0')
@@ -196,11 +241,6 @@ export default function HomePage() {
     document.body.style.cursor = 'col-resize'
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [])
-
-  useEffect(() => {
-    const saved = localStorage.getItem('hodari_theme') as Theme | null
-    if (saved === 'dark' || saved === 'light') setTheme(saved)
   }, [])
 
   useEffect(() => {
@@ -559,6 +599,48 @@ export default function HomePage() {
     handleSend(prompt)
   }, [handleSend])
 
+  const handleNewChat = useCallback(() => {
+    cancelSpeech()
+    sessionId.current = uid()
+    setMessages([])
+    setLoading(false)
+    setThinkingSteps([])
+    setStreamingStarted(false)
+    streamingStartedRef.current = false
+    setPlaces([])
+    setItinerary(null)
+    setActiveStop(null)
+    setMapOpen(false)
+    setChatCollapsed(false)
+    setRouteInfo(null)
+    setRouteError(null)
+    setRouteFromUser(false)
+    setCustomRoute(null)
+    setDetailsPlace(null)
+  }, [])
+
+  const handleSelectHistory = useCallback((id: string) => {
+    const item = historyItems.find((entry) => entry.id === id)
+    if (!item) return
+    cancelSpeech()
+    sessionId.current = item.id
+    setMessages(item.messages)
+    setLoading(false)
+    setThinkingSteps([])
+    setStreamingStarted(false)
+    streamingStartedRef.current = false
+    setPlaces([])
+    setItinerary(null)
+    setActiveStop(null)
+    setMapOpen(false)
+    setChatCollapsed(false)
+    setRouteInfo(null)
+    setRouteError(null)
+    setRouteFromUser(false)
+    setCustomRoute(null)
+    setDetailsPlace(null)
+  }, [historyItems])
+
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant') ?? null
   const itineraryStops = itinerary?.stops ?? null
   const mapPlaces = itineraryStops
@@ -585,6 +667,9 @@ export default function HomePage() {
       thinkingSteps={thinkingSteps}
       streamingStarted={streamingStarted}
       onSend={handleSend}
+      historyItems={historyItems}
+      onNewChat={handleNewChat}
+      onSelectHistory={handleSelectHistory}
       mapOpen={mapOpen}
       hasMapData={mapPlaces.length > 0}
       onToggleMap={() => setMapOpen((v) => !v)}
@@ -720,7 +805,7 @@ export default function HomePage() {
               onFeedback={handleFeedback}
               onSwap={handleSwap}
               onAsk={handleAsk}
-              onShowDetails={(stop) => setDetailsPlace(stop as Place)}
+              onShowDetails={(stop) => setDetailsPlace(stop as unknown as Place)}
               leftOffset={chatCollapsed ? 0 : chatWidth}
             />
           )}

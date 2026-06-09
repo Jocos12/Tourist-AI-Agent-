@@ -1,72 +1,39 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { startRecording, cancelSpeech, isSpeechInputSupported, type Recorder } from '@/lib/voice'
+import { useVoice } from '@/hooks/useVoice'
 
 interface Props {
   onTranscript: (text: string) => void
   disabled?: boolean
 }
 
-type State = 'idle' | 'recording' | 'transcribing'
-
 export function VoiceButton({ onTranscript, disabled }: Props) {
-  const [state, setState] = useState<State>('idle')
-  const [supported, setSupported] = useState(true)
-  const recorderRef = useRef<Recorder | null>(null)
-
-  useEffect(() => setSupported(isSpeechInputSupported()), [])
-
-  async function toggle() {
-    if (state === 'transcribing') return
-
-    if (state === 'recording') {
-      const rec = recorderRef.current
-      recorderRef.current = null
-      setState('transcribing')
-      try {
-        const text = await rec?.stop()
-        if (text) onTranscript(text)
-      } catch (e) {
-        console.error(e)
-      } finally {
-        setState('idle')
-      }
-      return
-    }
-
-    // idle -> start recording
-    cancelSpeech() // barge-in: stop Hodari mid-sentence when the user speaks
-    try {
-      recorderRef.current = await startRecording()
-      setState('recording')
-    } catch (e) {
-      console.error('mic unavailable:', e)
-      setSupported(false)
-      setState('idle')
-    }
-  }
+  const { voiceState, supported, warning, toggleVoice, isBusy } = useVoice({ onTranscript, disabled })
 
   const label = !supported
     ? 'Voice input is not available (mic blocked or unsupported)'
-    : state === 'recording' ? 'Tap to stop and send'
-    : state === 'transcribing' ? 'Transcribing…'
+    : voiceState === 'listening' ? 'Tap to stop and send'
+    : voiceState === 'thinking' ? 'Thinking…'
+    : voiceState === 'speaking' ? 'Tap to interrupt'
     : 'Push to talk'
 
   return (
     <div className="flex items-center gap-2">
-      {state === 'recording' && (
+      {voiceState === 'listening' && (
         <span className="font-mono text-[11px] text-gold/80">listening…</span>
       )}
-      {state === 'transcribing' && (
-        <span className="font-mono text-[11px] text-text3">transcribing…</span>
+      {voiceState === 'thinking' && (
+        <span className="font-mono text-[11px] text-text3">thinking…</span>
+      )}
+      {warning && (
+        <span className="font-mono text-[11px] text-text3">{warning}</span>
       )}
       <button
-        onClick={toggle}
-        disabled={disabled || !supported || state === 'transcribing'}
+        onClick={toggleVoice}
+        disabled={disabled || !supported || isBusy}
         title={label}
         className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors disabled:opacity-40 ${
-          state === 'recording' ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          voiceState === 'listening' ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
         }`}
       >
         <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">

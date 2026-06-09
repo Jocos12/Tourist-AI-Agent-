@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { subscribeVoiceActivity, type VoiceActivity } from '@/lib/voice'
+import { VoiceCaptions } from './VoiceCaptions'
 
 function MicGlyph() {
   return (
@@ -19,8 +20,8 @@ function WaveGlyph() {
   )
 }
 
-// Floating, audio-reactive voice bubble. Listening ripples to the real mic level;
-// speaking beats with a rhythmic pulse. Hidden when voice is idle.
+// Floating, audio-reactive voice bubble. Listening and speaking react to real
+// analyser levels; thinking idles softly. Hidden when voice is idle.
 export function VoiceOrb() {
   const [state, setState] = useState<VoiceActivity>('idle')
   const [level, setLevel] = useState(0)
@@ -29,22 +30,25 @@ export function VoiceOrb() {
 
   if (state === 'idle') return null
   const listening = state === 'listening'
+  const speaking = state === 'speaking'
+  const thinking = state === 'thinking'
 
-  // Listening: outer ring scales with live mic level. Speaking: CSS pulse.
-  const ringScale = listening ? 1 + Math.min(level, 1) * 0.5 : 1
+  const reactiveLevel = Math.min(level, 1)
+  const ringScale = listening || speaking ? 1 + reactiveLevel * 0.5 : 1
 
   return (
-    <div className="fixed bottom-6 right-6 z-40 flex flex-col items-center gap-2 pointer-events-none animate-fade-up">
-      <div className="relative w-20 h-20 flex items-center justify-center">
+    <div className="fixed inset-0 z-40 flex items-center justify-center pointer-events-none animate-fade-up">
+      <div className="flex flex-col items-center gap-3">
+      <div className="relative w-24 h-24 flex items-center justify-center">
         {/* Outer reactive halo */}
         <div
-          className={`absolute inset-0 rounded-full bg-gold/20 ${state === 'speaking' ? 'voice-orb-pulse' : ''}`}
-          style={listening ? { transform: `scale(${ringScale})`, transition: 'transform 70ms linear' } : undefined}
+          className={`absolute inset-0 rounded-full bg-gold/20 ${thinking ? 'voice-orb-pulse' : ''}`}
+          style={listening || speaking ? { transform: `scale(${ringScale})`, transition: 'transform 70ms linear' } : undefined}
         />
         {/* Second ring for depth */}
         <div
-          className={`absolute inset-2 rounded-full bg-gold/25 ${state === 'speaking' ? 'voice-orb-pulse-2' : ''}`}
-          style={listening ? { transform: `scale(${1 + Math.min(level, 1) * 0.28})`, transition: 'transform 70ms linear' } : undefined}
+          className={`absolute inset-2 rounded-full bg-gold/25 ${thinking ? 'voice-orb-pulse-2' : ''}`}
+          style={listening || speaking ? { transform: `scale(${1 + reactiveLevel * 0.28})`, transition: 'transform 70ms linear' } : undefined}
         />
         {/* Core */}
         <div className="relative w-12 h-12 rounded-full bg-gold text-bg flex items-center justify-center shadow-lg shadow-gold/40">
@@ -52,8 +56,10 @@ export function VoiceOrb() {
         </div>
       </div>
       <span className="glass rounded-full px-3 py-1 font-mono text-[10px] tracking-wider uppercase text-text2">
-        {listening ? 'Listening' : 'Speaking'}
+        {state}
       </span>
+      <VoiceCaptions active={speaking} />
+      </div>
     </div>
   )
 }

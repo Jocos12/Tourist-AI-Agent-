@@ -27,6 +27,14 @@ function milestoneKey(m: { agent: string; label: string }) {
   return `${m.agent}:${m.label}`
 }
 
+async function* streamTextChunks(text: string): AsyncGenerator<StreamChunk> {
+  const chunks = text.match(/\S+\s*/g) ?? [text]
+  for (const chunk of chunks) {
+    yield { type: 'text', text: chunk }
+    await new Promise((resolve) => setTimeout(resolve, 18))
+  }
+}
+
 export async function* streamChat(
   message: string,
   userId: string,
@@ -149,7 +157,8 @@ export async function* streamChat(
               streamedText = true
               yield { type: 'text', text: part.text }
             } else if (!streamedText) {
-              yield { type: 'text', text: part.text }
+              streamedText = true
+              yield* streamTextChunks(part.text)
             }
           }
         }

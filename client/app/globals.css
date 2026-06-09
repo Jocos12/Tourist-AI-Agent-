@@ -78,6 +78,15 @@ body::before {
   animation: gold-pulse 2s ease-in-out infinite;
 }
 
+@keyframes history-drawer-in {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+
+.animate-history-drawer-in {
+  animation: history-drawer-in 0.22s ease both;
+}
+
 /* ── Thinking ring (reasoning spinner) ───────────────────────────────────── */
 @keyframes orb-spin {
   to { transform: rotate(360deg); }

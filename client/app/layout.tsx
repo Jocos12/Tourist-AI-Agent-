@@ -13,7 +13,14 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('hodari_theme');if(t==='light'||!t)document.documentElement.classList.add('light');}catch(e){document.documentElement.classList.add('light');}})();`,
+          }}
+        />
+      </head>
       <body className="font-sans bg-bg text-text antialiased">{children}</body>
     </html>
   )

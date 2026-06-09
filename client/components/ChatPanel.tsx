@@ -12,6 +12,9 @@ interface Props {
   thinkingSteps: string[]
   streamingStarted: boolean
   onSend: (text: string) => void
+  historyItems: Array<{ id: string; title: string; updatedAt: number }>
+  onNewChat: () => void
+  onSelectHistory: (id: string) => void
   mapOpen: boolean
   hasMapData: boolean
   onToggleMap: () => void
@@ -81,8 +84,19 @@ function AiMessage({ content }: { content: string }) {
   )
 }
 
+function AiSkeleton() {
+  return (
+    <div className="space-y-2.5 py-1">
+      <div className="h-3 w-11/12 rounded-full bg-gold/10 animate-pulse" />
+      <div className="h-3 w-4/5 rounded-full bg-gold/10 animate-pulse" />
+      <div className="h-3 w-2/3 rounded-full bg-gold/10 animate-pulse" />
+    </div>
+  )
+}
+
 export function ChatPanel({
   messages, loading, thinkingSteps, streamingStarted, onSend,
+  historyItems, onNewChat, onSelectHistory,
   mapOpen, hasMapData, onToggleMap,
   selectedModel, onModelChange,
   theme, onToggleTheme,
@@ -92,20 +106,36 @@ export function ChatPanel({
   const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const autoScrollRef = useRef(true)
   const [atBottom, setAtBottom] = useState(true)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyQuery, setHistoryQuery] = useState('')
 
   function handleScroll() {
     const el = scrollRef.current
     if (!el) return
-    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80)
+    const nextAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    autoScrollRef.current = nextAtBottom
+    setAtBottom(nextAtBottom)
   }
 
   // Smart auto-scroll: follow new content only when the user is already at the
   // bottom, OR when they just sent a message — never yank them up mid-read.
   useEffect(() => {
     const last = messages[messages.length - 1]
-    if (last?.role === 'user' || atBottom) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (last?.role === 'user') {
+      autoScrollRef.current = true
+      setAtBottom(true)
+    }
+    if (last?.role === 'user' || autoScrollRef.current || atBottom) {
+      requestAnimationFrame(() => {
+        const el = scrollRef.current
+        if (el) {
+          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+        } else {
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+        }
+      })
     }
   }, [messages, loading, thinkingSteps, atBottom])
 
@@ -113,11 +143,16 @@ export function ChatPanel({
   const lastMsgId = messages[messages.length - 1]?.id
   const showThinking = loading && !streamingStarted
   const isEmpty = messages.length === 0 && !loading
+  const visibleHistoryItems = historyQuery.trim()
+    ? historyItems.filter((item) => item.title.toLowerCase().includes(historyQuery.trim().toLowerCase()))
+    : historyItems
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const text = inputRef.current?.value.trim()
     if (!text || loading) return
+    autoScrollRef.current = true
+    setAtBottom(true)
     onSend(text)
     inputRef.current!.value = ''
   }
@@ -155,6 +190,70 @@ export function ChatPanel({
 
   return (
     <div className="relative flex flex-col h-full overflow-hidden">
+      {historyOpen && (
+        <>
+          <button
+            type="button"
+            aria-label="Close chat history"
+            onClick={() => setHistoryOpen(false)}
+            className="fixed left-0 top-0 z-40 h-screen w-screen bg-[rgba(0,0,0,0.15)]"
+          />
+          <aside className="fixed left-0 top-0 z-50 h-full w-[240px] border-r border-gold/20 bg-[rgba(255,250,246,0.97)] shadow-2xl shadow-black/10 backdrop-blur-md animate-history-drawer-in">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
+              <span className="font-mono text-[10px] tracking-widest uppercase text-text3">Chat history</span>
+              <button
+                type="button"
+                aria-label="Close chat history"
+                onClick={() => setHistoryOpen(false)}
+                className="p-1.5 rounded-lg border border-border text-text3 hover:text-gold hover:border-gold/40 transition-all duration-200"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-3">
+              <input
+                type="search"
+                value={historyQuery}
+                onChange={(event) => setHistoryQuery(event.target.value)}
+                placeholder="Search chats..."
+                className="mb-3 w-full rounded-lg border border-border bg-surface/80 px-3 py-2 text-sm text-text outline-none placeholder:text-text3 focus:border-gold/40"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onNewChat()
+                  setHistoryOpen(false)
+                }}
+                className="w-full rounded-lg border border-border px-3 py-2 text-left font-mono text-[11px] uppercase tracking-wider text-text2 transition-all duration-200 hover:border-gold/40 hover:bg-gold/5 hover:text-text"
+              >
+                New chat
+              </button>
+              <div className="mt-4 space-y-1.5">
+                {visibleHistoryItems.length === 0 ? (
+                  <p className="px-1 text-xs leading-relaxed text-text3">No recent chats yet.</p>
+                ) : (
+                  visibleHistoryItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        onSelectHistory(item.id)
+                        setHistoryOpen(false)
+                      }}
+                      className="w-full rounded-lg px-2 py-2 text-left transition-all duration-200 hover:bg-gold/5"
+                    >
+                      <span className="block truncate text-sm text-text">{item.title}</span>
+                      <span className="mt-0.5 block font-mono text-[10px] uppercase tracking-wider text-text3">
+                        {new Date(item.updatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </aside>
+        </>
+      )}
 
       {/* ── Header ─────────────────────────────────────── */}
       <div className="px-5 pt-3.5 pb-3 flex items-center justify-between shrink-0">
@@ -175,6 +274,16 @@ export function ChatPanel({
             className="p-1.5 rounded-lg border border-border text-text3 hover:text-gold hover:border-gold/40 transition-all duration-200"
           >
             {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </button>
+
+          {/* History drawer */}
+          <button
+            type="button"
+            aria-label="Open chat history"
+            onClick={() => setHistoryOpen(true)}
+            className="p-1.5 rounded-lg border border-border text-text3 hover:text-gold hover:border-gold/40 transition-all duration-200"
+          >
+            <span className="block w-4 h-4 leading-4 text-center">☰</span>
           </button>
 
           {/* Map toggle */}
@@ -274,29 +383,8 @@ export function ChatPanel({
                   <p className="font-mono text-[10px] text-gold tracking-[0.15em] uppercase mb-2 ml-0.5">Hodari</p>
                   <div className="bg-surface border border-border rounded-2xl rounded-tl-sm px-5 py-4 relative overflow-hidden">
                     <div className="absolute top-3 left-4 w-6 h-6 rounded-full bg-gold/5 blur-md" />
-                    <div className="space-y-2.5 relative">
-                      {thinkingSteps.length === 0 ? (
-                        <div className="flex items-center gap-3">
-                          <div className="thinking-ring" />
-                          <span className="font-mono text-[11px] text-text3 tracking-widest">thinking…</span>
-                        </div>
-                      ) : (
-                        thinkingSteps.map((step, i) => {
-                          const isLast = i === thinkingSteps.length - 1
-                          return (
-                            <div key={i} className="flex items-center gap-3 animate-fade-up">
-                              {isLast ? (
-                                <div className="thinking-ring" />
-                              ) : (
-                                <span className="w-3.5 h-3.5 flex items-center justify-center shrink-0 font-mono text-[11px] text-gold/50">✓</span>
-                              )}
-                              <span className={`font-mono text-[11px] tracking-wider ${isLast ? 'text-gold/90' : 'text-text3'}`}>
-                                {step}
-                              </span>
-                            </div>
-                          )
-                        })
-                      )}
+                    <div className="relative">
+                      <AiSkeleton />
                     </div>
                   </div>
                 </div>

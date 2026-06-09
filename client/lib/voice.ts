@@ -10,12 +10,11 @@
 // ── Capability detection ─────────────────────────────────────────────────────
 
 export function isSpeechInputSupported(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof navigator !== 'undefined' &&
-    !!navigator.mediaDevices?.getUserMedia &&
-    typeof window.MediaRecorder !== 'undefined'
-  )
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
+  const hasMic = !!navigator.mediaDevices?.getUserMedia
+  const hasRecorder = typeof window.MediaRecorder !== 'undefined'
+  const hasBrowserStt = createBrowserRecognizer() !== null
+  return hasMic && (hasRecorder || hasBrowserStt)
 }
 
 export function isSpeechOutputSupported(): boolean {
@@ -24,12 +23,17 @@ export function isSpeechOutputSupported(): boolean {
 
 // ── Voice activity broadcast (drives the reactive UI bubble) ─────────────────
 
-export type VoiceActivity = 'idle' | 'listening' | 'speaking'
+export type VoiceState = 'listening' | 'thinking' | 'speaking'
+export type VoiceActivity = 'idle' | VoiceState
 type ActivityListener = (state: VoiceActivity, level: number) => void
+type CaptionListener = (caption: string) => void
 
 const activityListeners = new Set<ActivityListener>()
+const captionListeners = new Set<CaptionListener>()
 let activityState: VoiceActivity = 'idle'
 let activityLevel = 0
+let currentCaption = ''
+let outputMeterStop: (() => void) | null = null
 
 /** Subscribe to voice activity (state + 0..1 audio level). Returns unsubscribe. */
 export function subscribeVoiceActivity(cb: ActivityListener): () => void {
@@ -38,7 +42,18 @@ export function subscribeVoiceActivity(cb: ActivityListener): () => void {
   return () => { activityListeners.delete(cb) }
 }
 
-function emitActivity(state: VoiceActivity, level: number): void {
+export function subscribeVoiceCaptions(cb: CaptionListener): () => void {
+  captionListeners.add(cb)
+  cb(currentCaption)
+  return () => { captionListeners.delete(cb) }
+}
+
+function emitCaption(caption: string): void {
+  currentCaption = caption
+  captionListeners.forEach((l) => l(caption))
+}
+
+export function emitActivity(state: VoiceActivity, level: number): void {
   activityState = state
   activityLevel = level
   activityListeners.forEach((l) => l(state, level))
@@ -80,32 +95,166 @@ function stopMicMeter(): void {
   if (micMeterStop) { micMeterStop(); micMeterStop = null }
 }
 
-// ── Speech input (record -> Gemini STT) ──────────────────────────────────────
-
-export interface Recorder {
-  /** Stop recording, transcribe via Gemini, and resolve the transcript. */
-  stop(): Promise<string>
-  /** Abort recording and discard audio (no transcription). */
-  cancel(): void
-}
-
-function pickMimeType(): string | undefined {
-  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
-  for (const c of candidates) {
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)) return c
+function startOutputMeter(audio: HTMLAudioElement): void {
+  try {
+    const ctx = makeAudioContext()
+    const src = ctx.createMediaElementSource(audio)
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 256
+    src.connect(analyser)
+    analyser.connect(ctx.destination)
+    const data = new Uint8Array(analyser.frequencyBinCount)
+    let raf = 0
+    const tick = () => {
+      analyser.getByteFrequencyData(data)
+      let sum = 0
+      for (let i = 0; i < data.length; i++) sum += data[i]
+      emitActivity('speaking', Math.min(1, (sum / data.length) / 120))
+      raf = requestAnimationFrame(tick)
+    }
+    tick()
+    outputMeterStop = () => {
+      cancelAnimationFrame(raf)
+      try { analyser.disconnect(); src.disconnect(); ctx.close() } catch { /* noop */ }
+    }
+  } catch {
+    emitActivity('speaking', 0.45)
   }
-  return undefined
 }
 
-/** Begin recording from the mic. Returns a handle to stop (and transcribe) or cancel. */
-export async function startRecording(): Promise<Recorder> {
+function stopOutputMeter(): void {
+  if (outputMeterStop) { outputMeterStop(); outputMeterStop = null }
+}
+
+// ── Browser speech APIs (fallback when Gemini is unavailable) ────────────────
+
+type BrowserSpeechRecognition = {
+  continuous: boolean
+  interimResults: boolean
+  lang: string
+  onresult: ((event: { results: { length: number; [i: number]: { 0: { transcript: string } } } }) => void) | null
+  onerror: (() => void) | null
+  onend: (() => void) | null
+  start: () => void
+  stop: () => void
+}
+
+function createBrowserRecognizer(): BrowserSpeechRecognition | null {
+  if (typeof window === 'undefined') return null
+  const w = window as unknown as {
+    SpeechRecognition?: new () => BrowserSpeechRecognition
+    webkitSpeechRecognition?: new () => BrowserSpeechRecognition
+  }
+  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition
+  return Ctor ? new Ctor() : null
+}
+
+/** Cached after the first status check or Gemini failure — avoids repeated 502s. */
+let geminiSttAvailable: boolean | null = null
+
+async function shouldUseGeminiStt(): Promise<boolean> {
+  if (geminiSttAvailable === false) return false
+  if (geminiSttAvailable === true) return true
+  try {
+    const res = await fetch('/api/voice/status', { cache: 'no-store' })
+    if (!res.ok) {
+      geminiSttAvailable = false
+      return false
+    }
+    const body = (await res.json()) as { stt?: string }
+    geminiSttAvailable = body.stt === 'gemini'
+  } catch {
+    geminiSttAvailable = false
+  }
+  return geminiSttAvailable
+}
+
+function markGeminiSttUnavailable(): void {
+  geminiSttAvailable = false
+}
+
+/** Browser-native STT — no MediaRecorder, avoids mic conflicts with SpeechRecognition. */
+async function startBrowserSpeechRecording(): Promise<Recorder> {
+  const recognition = createBrowserRecognizer()
+  if (!recognition) {
+    throw new Error('Browser speech recognition is not supported in this browser.')
+  }
+
+  let transcript = ''
+  let done = false
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  startMicMeter(stream)
+
+  recognition.continuous = true
+  recognition.interimResults = true
+  recognition.lang = navigator.language || 'en-US'
+  recognition.onresult = (event) => {
+    const parts: string[] = []
+    for (let i = 0; i < event.results.length; i++) {
+      parts.push(event.results[i][0].transcript)
+    }
+    transcript = parts.join(' ').trim()
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    recognition.onstart = () => resolve()
+    recognition.onerror = () => reject(new Error('Speech recognition failed to start'))
+    try {
+      recognition.start()
+    } catch (error) {
+      reject(error)
+    }
+  })
+
+  const teardown = () => {
+    stream.getTracks().forEach((t) => t.stop())
+    stopMicMeter()
+    emitActivity('idle', 0)
+  }
+
+  return {
+    async stop(): Promise<string> {
+      if (done) return transcript
+      done = true
+      return new Promise((resolve) => {
+        recognition.onend = () => {
+          teardown()
+          resolve(transcript)
+        }
+        recognition.onerror = () => {
+          teardown()
+          resolve(transcript)
+        }
+        try {
+          recognition.stop()
+        } catch {
+          teardown()
+          resolve(transcript)
+        }
+      })
+    },
+    cancel(): void {
+      if (done) return
+      done = true
+      try {
+        recognition.stop()
+      } catch {
+        /* noop */
+      }
+      teardown()
+    },
+  }
+}
+
+async function startGeminiRecording(): Promise<Recorder> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
   const mimeType = pickMimeType()
   const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
   const chunks: Blob[] = []
   recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
   recorder.start()
-  startMicMeter(stream) // live level for the reactive bubble
+  startMicMeter(stream)
 
   let done = false
   const teardown = () => {
@@ -125,7 +274,7 @@ export async function startRecording(): Promise<Recorder> {
       teardown()
       if (!blob) return ''
       const wavBase64 = await blobToWavBase64(blob)
-      return transcribe(wavBase64)
+      return transcribeWithGemini(wavBase64)
     },
     cancel(): void {
       if (done) return
@@ -136,15 +285,62 @@ export async function startRecording(): Promise<Recorder> {
   }
 }
 
-async function transcribe(wavBase64: string): Promise<string> {
-  const res = await fetch('/api/voice/transcribe', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ audioBase64: wavBase64, mimeType: 'audio/wav' }),
+async function speakWithBrowser(text: string): Promise<void> {
+  if (!('speechSynthesis' in window)) return
+  await new Promise<void>((resolve) => {
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.onend = () => resolve()
+    utterance.onerror = () => resolve()
+    animateCaptions(text, Math.max(1500, text.length * 45))
+    emitActivity('speaking', 0.35)
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(utterance)
   })
-  if (!res.ok) throw new Error(`Transcription failed: ${res.status}`)
-  const { text } = await res.json()
-  return (text ?? '').trim()
+}
+
+// ── Speech input (record -> Gemini STT or browser STT) ───────────────────────
+
+export interface Recorder {
+  /** Stop recording, transcribe, and resolve the transcript. */
+  stop(): Promise<string>
+  /** Abort recording and discard audio (no transcription). */
+  cancel(): void
+}
+
+function pickMimeType(): string | undefined {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
+  for (const c of candidates) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)) return c
+  }
+  return undefined
+}
+
+/** Begin recording from the mic. Uses Gemini when configured, otherwise browser STT. */
+export async function startRecording(): Promise<Recorder> {
+  if (await shouldUseGeminiStt()) {
+    return startGeminiRecording()
+  }
+  return startBrowserSpeechRecording()
+}
+
+async function transcribeWithGemini(wavBase64: string): Promise<string> {
+  try {
+    const res = await fetch('/api/voice/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audioBase64: wavBase64, mimeType: 'audio/wav' }),
+    })
+    if (!res.ok) {
+      markGeminiSttUnavailable()
+      return ''
+    }
+    const { text } = await res.json()
+    const transcript = (text ?? '').trim()
+    if (transcript) return transcript
+  } catch {
+    markGeminiSttUnavailable()
+  }
+  return ''
 }
 
 // Decode the recorded clip and re-encode as mono 16-bit WAV — a format Gemini
@@ -228,6 +424,9 @@ function toSpeakable(markdown: string): string {
 }
 
 let currentAudio: HTMLAudioElement | null = null
+let currentCaptionRaf = 0
+let speechCancelled = false
+let playbackCancelResolve: (() => void) | null = null
 
 /** Speak text aloud via Gemini TTS. Cancels any in-flight playback first. */
 export async function speak(markdown: string): Promise<void> {
@@ -235,38 +434,109 @@ export async function speak(markdown: string): Promise<void> {
   const text = toSpeakable(markdown)
   if (!text) return
   cancelSpeech()
+  speechCancelled = false
 
   try {
-    const res = await fetch('/api/voice/speak', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    })
-    if (!res.ok) return
-    const blob = new Blob([await res.arrayBuffer()], { type: 'audio/wav' })
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    currentAudio = audio
-    const cleanup = () => {
-      URL.revokeObjectURL(url)
-      if (currentAudio === audio) {
-        currentAudio = null
-        emitActivity('idle', 0)
-      }
+    const chunks = chunkSpeakableText(text)
+    let spoken = ''
+    let playedAny = false
+    for (const chunk of chunks) {
+      if (speechCancelled) break
+      const res = await fetch('/api/voice/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: chunk }),
+      })
+      if (!res.ok) continue
+      const blob = new Blob([await res.arrayBuffer()], { type: 'audio/wav' })
+      spoken = `${spoken} ${chunk}`.trim()
+      playedAny = true
+      await playAudioBlob(blob, spoken)
+      if (speechCancelled) break
     }
-    audio.onended = cleanup
-    audio.onerror = cleanup
-    audio.onplay = () => { if (currentAudio === audio) emitActivity('speaking', 0.6) }
-    await audio.play()
+    if (!speechCancelled && !playedAny) {
+      await speakWithBrowser(text)
+    }
   } catch {
-    /* playback is best-effort */
+    if (!speechCancelled) await speakWithBrowser(text)
+  } finally {
+    if (!currentAudio) {
+      emitCaption('')
+      emitActivity('idle', 0)
+    }
   }
 }
 
 export function cancelSpeech(): void {
+  speechCancelled = true
+  cancelAnimationFrame(currentCaptionRaf)
+  currentCaptionRaf = 0
+  stopOutputMeter()
   if (currentAudio) {
     try { currentAudio.pause() } catch { /* noop */ }
     currentAudio = null
   }
+  playbackCancelResolve?.()
+  playbackCancelResolve = null
+  emitCaption('')
   emitActivity('idle', 0)
+}
+
+function chunkSpeakableText(text: string): string[] {
+  const sentences = text.match(/[^.!?]+[.!?]*/g)?.map((s) => s.trim()).filter(Boolean) ?? [text]
+  const chunks: string[] = []
+  let current = ''
+  for (const sentence of sentences) {
+    if ((current + ' ' + sentence).trim().length > 260 && current) {
+      chunks.push(current)
+      current = sentence
+    } else {
+      current = `${current} ${sentence}`.trim()
+    }
+  }
+  if (current) chunks.push(current)
+  return chunks
+}
+
+function animateCaptions(text: string, durationMs: number): void {
+  cancelAnimationFrame(currentCaptionRaf)
+  const words = text.split(/\s+/).filter(Boolean)
+  const startedAt = performance.now()
+  const tick = () => {
+    const elapsed = performance.now() - startedAt
+    const count = Math.max(1, Math.min(words.length, Math.ceil((elapsed / Math.max(durationMs, 1)) * words.length)))
+    emitCaption(words.slice(0, count).join(' '))
+    if (count < words.length) currentCaptionRaf = requestAnimationFrame(tick)
+  }
+  tick()
+}
+
+function playAudioBlob(blob: Blob, captionText: string): Promise<void> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob)
+    const audio = new Audio(url)
+    currentAudio = audio
+    const cleanup = () => {
+      playbackCancelResolve = null
+      cancelAnimationFrame(currentCaptionRaf)
+      currentCaptionRaf = 0
+      stopOutputMeter()
+      URL.revokeObjectURL(url)
+      if (currentAudio === audio) currentAudio = null
+      resolve()
+    }
+    playbackCancelResolve = cleanup
+    audio.onloadedmetadata = () => {
+      animateCaptions(captionText, Number.isFinite(audio.duration) ? audio.duration * 1000 : Math.max(1500, captionText.length * 45))
+    }
+    audio.onended = cleanup
+    audio.onerror = cleanup
+    audio.onplay = () => {
+      if (currentAudio === audio) {
+        emitActivity('speaking', 0.4)
+        startOutputMeter(audio)
+      }
+    }
+    audio.play().catch(cleanup)
+  })
 }
