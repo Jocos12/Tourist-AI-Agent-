@@ -12,6 +12,7 @@ from google.adk.tools import ToolContext
 from ..intent import LIST_DISCOVERY
 from .maps_client import search_places_async
 from .mongo_tools import _user_id, enqueue_preference_saves
+from .response_cache import get_response_cache
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,19 @@ def rank_places(places: list[dict[str, Any]], request: str, limit: int) -> list[
 
 async def discover_places(request: str, tool_context: ToolContext) -> str:
     """Search Maps once, rank in Python, store candidates; no itinerary agent."""
+    cache = get_response_cache()
+    cached = cache.get(request)
+    if cached is not None:
+        logger.info("LIST_DISCOVERY cache hit for %r", request[:80])
+        tool_context.state["intent_type"] = LIST_DISCOVERY
+        cached_data = json.loads(cached)
+        tool_context.state["candidates"] = json.dumps(
+            cached_data.get("candidates", []), ensure_ascii=False
+        )
+        tool_context.state["itinerary"] = ""
+        tool_context.state["plan"] = ""
+        return cached
+
     limit = extract_place_limit(request)
     logger.info("LIST_DISCOVERY fast path: limit=%d request=%r", limit, request[:120])
 
@@ -115,7 +129,7 @@ async def discover_places(request: str, tool_context: ToolContext) -> str:
     except Exception as exc:
         logger.warning("Background candidate saves failed: %s", exc)
 
-    return json.dumps(
+    result = json.dumps(
         {
             "intent_type": LIST_DISCOVERY,
             "candidates": candidates,
@@ -127,3 +141,5 @@ async def discover_places(request: str, tool_context: ToolContext) -> str:
         },
         ensure_ascii=False,
     )
+    cache.set(request, result)
+    return result
