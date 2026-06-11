@@ -149,6 +149,40 @@ export function PlaceStack({
                   <RouteIcon />
                   {locationPending ? 'Getting location…' : hasUserLocation ? 'Route from me' : 'Allow location for route'}
                 </button>
+                {/* SAVE BUTTON - Fixed for Place type */}
+<button
+  onClick={async () => {
+    try {
+      const response = await fetch('/api/saved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          placeId: active.place_id,  // Use place_id (exists in Place type)
+          name: active.name,
+          rating: active.rating,
+          priceLevel: active.price_level,
+          cuisine: active.categories?.[0] || null,  // Use categories instead of cuisine
+          photoRef: null,  // Photos property not available in Place type
+        }),
+      });
+      if (response.ok) {
+        alert(`✓ Saved "${active.name}" to your collection`);
+      } else {
+        const error = await response.json();
+        alert(`Failed to save: ${error.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Save failed:', error);
+      alert('Failed to save place. Please try again.');
+    }
+  }}
+  className="flex items-center gap-1.5 font-mono text-[11px] tracking-wider uppercase text-green-600 hover:text-green-700 px-3 py-1.5 rounded-full border border-green-300 hover:bg-green-50 transition-all"
+>
+  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current">
+    <path d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z" />
+  </svg>
+  Save
+</button>
               </div>
 
               <div className="mb-1">
