@@ -28,3 +28,8 @@ __pycache__/
 *.pyo
 .venv/
 .env
+
+client/.env.local
+client/.env.local.example
+
+True Backend/

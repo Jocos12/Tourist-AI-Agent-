@@ -1,5 +1,8 @@
 import { NextRequest } from 'next/server'
 
+// Full pipeline (Planner → Explorer → Itinerary) can exceed 2 minutes locally.
+export const maxDuration = 300
+
 const ADK_BASE = process.env.ADK_BASE_URL ?? 'http://localhost:8000'
 const APP_NAME = process.env.ADK_APP_NAME ?? 'hodari'
 
@@ -28,7 +31,13 @@ export async function POST(req: NextRequest) {
   })
 
   if (!adkRes.ok || !adkRes.body) {
-    return new Response('Agent unreachable', { status: 502 })
+    const detail = adkRes.ok
+      ? 'no stream body from agent'
+      : (await adkRes.text().catch(() => '')).slice(0, 300)
+    return new Response(
+      `Agent unreachable (${adkRes.status}${detail ? `: ${detail}` : ''})`,
+      { status: 502 },
+    )
   }
 
   return new Response(adkRes.body, {

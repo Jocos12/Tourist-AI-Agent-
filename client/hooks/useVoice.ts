@@ -1,53 +1,81 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useReducer, useCallback, useEffect, useRef, useState } from 'react'
 import {
   cancelSpeech,
   emitActivity,
   isSpeechInputSupported,
+  pauseSpeech,
+  resumeSpeech,
   startRecording,
+  stopSpeech,
   subscribeVoiceActivity,
-  type Recorder,
-  type VoiceState,
+  subscribeLiveTranscript,
 } from '@/lib/voice'
 
-type VoiceStatus = VoiceState | 'idle'
+export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'paused'
 
-interface UseVoiceOptions {
-  onTranscript: (text: string) => void
-  disabled?: boolean
+type Action =
+  | { type: 'LISTEN' }
+  | { type: 'THINK' }
+  | { type: 'SPEAK' }
+  | { type: 'PAUSE' }
+  | { type: 'IDLE' }
+  | { type: 'ERROR' }
+
+function reducer(_: VoiceState, action: Action): VoiceState {
+  switch (action.type) {
+    case 'LISTEN': return 'listening'
+    case 'THINK': return 'thinking'
+    case 'SPEAK': return 'speaking'
+    case 'PAUSE': return 'paused'
+    case 'IDLE':
+    case 'ERROR':
+      return 'idle'
+    default: return 'idle'
+  }
 }
 
-export function useVoice({ onTranscript, disabled }: UseVoiceOptions) {
-  const [voiceState, setVoiceState] = useState<VoiceStatus>('idle')
+interface Options {
+  onTranscript: (text: string) => void
+  disabled?: boolean
+  autoResumeAfterSpeak?: boolean
+}
+
+export function useVoice({ onTranscript, disabled, autoResumeAfterSpeak = true }: Options) {
+  const [state, dispatch] = useReducer(reducer, 'idle')
   const [supported, setSupported] = useState(true)
   const [warning, setWarning] = useState('')
-  const recorderRef = useRef<Recorder | null>(null)
+  const [liveText, setLiveText] = useState('')
+  const recorderRef = useRef<Awaited<ReturnType<typeof startRecording>> | null>(null)
   const lastSpeechAtRef = useRef(0)
   const rafRef = useRef(0)
   const levelRef = useRef(0)
+  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const suppressAutoResumeRef = useRef(false)
+  const stateRef = useRef(state)
+  stateRef.current = state
 
   const stopListening = useCallback(async () => {
     const rec = recorderRef.current
     if (!rec) return
-
     recorderRef.current = null
-    setVoiceState('thinking')
+    dispatch({ type: 'THINK' })
     emitActivity('thinking', 0.12)
 
     try {
       const text = await rec.stop()
       if (text) {
         onTranscript(text)
+        dispatch({ type: 'THINK' })
       } else {
-        setWarning('No speech detected. Try speaking clearly, or use Chrome/Edge for voice input.')
-        setVoiceState('idle')
+        setWarning('No speech detected. Try speaking clearly in Chrome or Edge.')
+        dispatch({ type: 'IDLE' })
         emitActivity('idle', 0)
       }
-    } catch (error) {
-      console.error(error)
+    } catch {
       setWarning('Voice transcription failed. Please try again.')
-      setVoiceState('idle')
+      dispatch({ type: 'ERROR' })
       emitActivity('idle', 0)
     }
   }, [onTranscript])
@@ -55,7 +83,9 @@ export function useVoice({ onTranscript, disabled }: UseVoiceOptions) {
   const startListening = useCallback(async () => {
     if (disabled) return
     setWarning('')
-    cancelSpeech()
+    setLiveText('')
+    stopSpeech()
+    dispatch({ type: 'IDLE' })
 
     if (!isSpeechInputSupported()) {
       setSupported(false)
@@ -66,48 +96,91 @@ export function useVoice({ onTranscript, disabled }: UseVoiceOptions) {
     try {
       recorderRef.current = await startRecording()
       lastSpeechAtRef.current = performance.now()
-      setVoiceState('listening')
-    } catch (error) {
-      console.error('mic unavailable:', error)
+      dispatch({ type: 'LISTEN' })
+      emitActivity('listening', 0)
+    } catch {
       setSupported(false)
       setWarning('Microphone permission denied.')
-      setVoiceState('idle')
+      dispatch({ type: 'ERROR' })
       emitActivity('idle', 0)
     }
   }, [disabled])
 
+  const stopAll = useCallback(() => {
+    stopSpeech()
+    recorderRef.current?.cancel()
+    recorderRef.current = null
+    dispatch({ type: 'IDLE' })
+    emitActivity('idle', 0)
+  }, [])
+
+  const pauseSpeaking = useCallback(() => {
+    if (pauseSpeech()) {
+      dispatch({ type: 'PAUSE' })
+    }
+  }, [])
+
+  const resumeSpeaking = useCallback(() => {
+    if (resumeSpeech()) {
+      dispatch({ type: 'SPEAK' })
+    }
+  }, [])
+
+  const stopSpeakingAndListen = useCallback(() => {
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current)
+    suppressAutoResumeRef.current = true
+    stopSpeech()
+    void startListening().finally(() => {
+      suppressAutoResumeRef.current = false
+    })
+  }, [startListening])
+
   const toggleVoice = useCallback(() => {
-    if (voiceState === 'listening') {
+    if (state === 'listening') {
       void stopListening()
       return
     }
-
-    if (voiceState === 'speaking') {
-      cancelSpeech()
-      void startListening()
+    if (state === 'paused') {
+      resumeSpeaking()
       return
     }
-
-    if (voiceState === 'thinking') return
+    if (state === 'speaking') {
+      stopSpeakingAndListen()
+      return
+    }
+    if (state === 'thinking') return
     void startListening()
-  }, [startListening, stopListening, voiceState])
+  }, [state, startListening, stopListening, stopSpeakingAndListen, resumeSpeaking])
 
   useEffect(() => setSupported(isSpeechInputSupported()), [])
 
-  useEffect(() => {
-    return subscribeVoiceActivity((state, level) => {
-      levelRef.current = level
-      if (state === 'speaking') setVoiceState('speaking')
-      if (state === 'idle' && voiceState !== 'listening') setVoiceState('idle')
-    })
-  }, [voiceState])
+  useEffect(() => subscribeLiveTranscript(setLiveText), [])
 
   useEffect(() => {
-    if (voiceState !== 'listening') {
+    return subscribeVoiceActivity((s, level) => {
+      levelRef.current = level
+      if (s === 'speaking') dispatch({ type: 'SPEAK' })
+      if (s === 'paused') dispatch({ type: 'PAUSE' })
+      if (s === 'thinking') dispatch({ type: 'THINK' })
+      if (s === 'idle' && stateRef.current !== 'listening') {
+        const wasSpeaking = stateRef.current === 'speaking'
+        dispatch({ type: 'IDLE' })
+        if (autoResumeAfterSpeak && wasSpeaking && !disabled && !suppressAutoResumeRef.current) {
+          if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current)
+          resumeTimerRef.current = setTimeout(() => {
+            resumeTimerRef.current = null
+            void startListening()
+          }, 700)
+        }
+      }
+    })
+  }, [disabled, autoResumeAfterSpeak, startListening])
+
+  useEffect(() => {
+    if (state !== 'listening') {
       cancelAnimationFrame(rafRef.current)
       return
     }
-
     const tick = () => {
       const now = performance.now()
       if (levelRef.current > 0.035) lastSpeechAtRef.current = now
@@ -117,23 +190,27 @@ export function useVoice({ onTranscript, disabled }: UseVoiceOptions) {
       }
       rafRef.current = requestAnimationFrame(tick)
     }
-
     rafRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [stopListening, voiceState])
+  }, [state, stopListening])
 
-  useEffect(() => {
-    return () => {
-      cancelAnimationFrame(rafRef.current)
-      recorderRef.current?.cancel()
-    }
+  useEffect(() => () => {
+    cancelAnimationFrame(rafRef.current)
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current)
+    recorderRef.current?.cancel()
   }, [])
 
   return {
-    voiceState,
+    voiceState: state,
     supported,
     warning,
+    liveText,
     toggleVoice,
-    isBusy: voiceState === 'thinking',
+    startListening,
+    stopAll,
+    pauseSpeaking,
+    resumeSpeaking,
+    stopSpeakingAndListen,
+    isBusy: state === 'thinking' || state === 'speaking' || state === 'paused',
   }
 }
