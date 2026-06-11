@@ -48,7 +48,8 @@ export async function* streamChat(
   })
 
   if (!res.ok || !res.body) {
-    throw new Error(`Chat request failed: ${res.status}`)
+    const detail = (await res.text().catch(() => '')).trim()
+    throw new Error(detail || `Chat request failed: ${res.status}`)
   }
 
   const reader = res.body.getReader()

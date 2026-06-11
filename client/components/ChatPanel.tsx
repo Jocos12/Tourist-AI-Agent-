@@ -1,11 +1,13 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   ChevronDown,
   History,
   Map as MapIcon,
+  Bookmark,
   MapPin,
   Menu,
   MessageSquare,
@@ -458,6 +460,14 @@ export function ChatPanel({
             placeholder="Search chats…"
             className="mb-3 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-header)] px-3 py-2 text-[13px] text-[var(--text-primary)] outline-none focus:border-amber-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
           />
+          <Link
+            href="/saved"
+            onClick={() => setHistoryOpen(false)}
+            className="mb-2 flex w-full items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-left text-[11px] uppercase tracking-wider text-[var(--text-primary)] transition-colors hover:border-amber-300 hover:bg-amber-50 dark:border-amber-500/50 dark:text-amber-400 dark:hover:bg-amber-900/20"
+          >
+            <Bookmark className="h-3.5 w-3.5 shrink-0" />
+            Saved places
+          </Link>
           <button
             type="button"
             onClick={() => { onNewChat(); setHistoryOpen(false) }}

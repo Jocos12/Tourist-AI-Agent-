@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Clock, ExternalLink, MapPin, Star } from 'lucide-react'
 import type { Place } from '@/lib/types'
+import { PlacePhotoGallery } from './PlacePhotoGallery'
+import { SavePlaceButton } from './SavePlaceButton'
 
 const PLACES_NEW_ENABLED = process.env.NEXT_PUBLIC_PLACES_API_NEW === '1'
 
@@ -27,6 +29,8 @@ interface Props {
   fallbackMapsUrl: string
   fallbackPlace?: Place | null
   onClose: () => void
+  /** Show save-to-collection control (default true when place id is real). */
+  showSave?: boolean
 }
 
 const PRICE_SYMBOL: Record<string, string> = {
@@ -111,6 +115,7 @@ export function PlaceDetailsPanel({
   fallbackMapsUrl,
   fallbackPlace,
   onClose,
+  showSave,
 }: Props) {
   const initial = useMemo(
     () => (fallbackPlace ? buildFromFallback(fallbackPlace, fallbackMapsUrl) : null),
@@ -210,49 +215,26 @@ export function PlaceDetailsPanel({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-up" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
-      <div className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-header)] shadow-2xl">
-        <div className="relative h-44 shrink-0 overflow-hidden bg-gradient-to-br from-amber-50 to-[#fdf3ee] dark:from-amber-950/40 dark:to-slate-900">
+      <div className="relative flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-header)] shadow-2xl">
+        <button
+          type="button"
+          onClick={onClose}
+          title="Close"
+          className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm transition-colors hover:bg-black/70"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
+        </button>
+
+        <div className="scrollbar-hide overflow-y-auto p-5">
           {data?.photoUrls?.length ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={data.photoUrls[0]}
-              alt={displayName}
-              className="h-full w-full object-cover"
-              loading="lazy"
-            />
+            <PlacePhotoGallery urls={data.photoUrls} alt={displayName} className="h-52" />
           ) : (
-            <div className="flex h-full w-full items-center justify-center">
+            <div className="flex h-44 items-center justify-center rounded-xl bg-gradient-to-br from-amber-50 to-[#fdf3ee] dark:from-amber-950/40 dark:to-slate-900">
               <span className="font-display text-4xl font-semibold text-amber-600/60">
                 {displayName.split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase()}
               </span>
             </div>
           )}
-          <button
-            type="button"
-            onClick={onClose}
-            title="Close"
-            className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm transition-colors hover:bg-black/70"
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
-          </button>
-        </div>
-
-        {data && data.photoUrls.length > 1 && (
-          <div className="flex gap-2 overflow-x-auto border-b border-[var(--border)] px-3 py-2 scrollbar-hide">
-            {data.photoUrls.map((url, i) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={`${url}-${i}`}
-                src={url}
-                alt={`${displayName} photo ${i + 1}`}
-                className="h-14 w-20 shrink-0 rounded-lg object-cover"
-                loading="lazy"
-              />
-            ))}
-          </div>
-        )}
-
-        <div className="scrollbar-hide overflow-y-auto p-5">
           <h2 className="font-display text-xl font-semibold leading-tight text-[var(--text-primary)]">
             {displayName}
           </h2>
@@ -317,6 +299,9 @@ export function PlaceDetailsPanel({
               )}
 
               <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4">
+                {(showSave ?? (!placeId.startsWith('__'))) && fallbackPlace && (
+                  <SavePlaceButton place={fallbackPlace} />
+                )}
                 {mapsLink && (
                   <a
                     href={mapsLink}

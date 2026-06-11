@@ -415,9 +415,13 @@ export default function LandingPage() {
         // User stopped the request — leave whatever partial text is already in messages
       } else {
         console.error(err)
+        const msg =
+          err instanceof Error && err.message && !err.message.startsWith('Chat request failed')
+            ? err.message.slice(0, 320)
+            : 'Something went wrong. Is the agent server running? (cd agents → adk api_server hodari)'
         setMessages((prev) => [
           ...prev,
-          { id: uid(), role: 'assistant', content: 'Something went wrong. Please try again.' },
+          { id: uid(), role: 'assistant', content: msg },
         ])
       }
     } finally {
