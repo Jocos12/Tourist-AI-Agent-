@@ -1,44 +1,60 @@
 'use client'
 
+import { Mic, Square } from 'lucide-react'
 import { useVoice } from '@/hooks/useVoice'
 
 interface Props {
   onTranscript: (text: string) => void
   disabled?: boolean
+  compact?: boolean
 }
 
-export function VoiceButton({ onTranscript, disabled }: Props) {
+export function VoiceButton({ onTranscript, disabled, compact }: Props) {
   const { voiceState, supported, warning, toggleVoice, isBusy } = useVoice({ onTranscript, disabled })
 
   const label = !supported
-    ? 'Voice input is not available (mic blocked or unsupported)'
-    : voiceState === 'listening' ? 'Tap to stop and send'
-    : voiceState === 'thinking' ? 'Thinking…'
-    : voiceState === 'speaking' ? 'Tap to interrupt'
-    : 'Push to talk'
+    ? 'Voice unavailable'
+    : voiceState === 'listening' ? 'Stop listening'
+    : voiceState === 'thinking' ? 'Processing…'
+    : voiceState === 'speaking' ? 'Stop speaking'
+    : voiceState === 'paused' ? 'Resume speaking'
+    : 'Start voice input'
+
+  if (compact) {
+    return (
+      <>
+        {warning && <span className="sr-only">{warning}</span>}
+        <button
+          type="button"
+          onClick={toggleVoice}
+          disabled={disabled || !supported || isBusy}
+          title={label}
+          aria-label={label}
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${
+            voiceState === 'listening'
+              ? 'bg-red-500 text-white'
+              : 'text-gray-500 hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-900/30'
+          }`}
+        >
+          {voiceState === 'listening' ? <Square className="h-3.5 w-3.5 fill-current" /> : <Mic className="h-4 w-4" />}
+        </button>
+      </>
+    )
+  }
 
   return (
     <div className="flex items-center gap-2">
-      {voiceState === 'listening' && (
-        <span className="font-mono text-[11px] text-gold/80">listening…</span>
-      )}
-      {voiceState === 'thinking' && (
-        <span className="font-mono text-[11px] text-text3">thinking…</span>
-      )}
-      {warning && (
-        <span className="font-mono text-[11px] text-text3">{warning}</span>
-      )}
+      {warning && <span className="text-[11px] text-gray-500">{warning}</span>}
       <button
+        type="button"
         onClick={toggleVoice}
         disabled={disabled || !supported || isBusy}
         title={label}
-        className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors disabled:opacity-40 ${
-          voiceState === 'listening' ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+        className={`flex h-10 w-10 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${
+          voiceState === 'listening' ? 'bg-red-500 text-white' : 'border border-gray-200 text-gray-600 hover:border-amber-300 dark:border-slate-600'
         }`}
       >
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">
-          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
-        </svg>
+        {voiceState === 'listening' ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-4 w-4" />}
       </button>
     </div>
   )

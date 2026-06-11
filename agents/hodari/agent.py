@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from google.adk.agents import LlmAgent, SequentialAgent
+from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.apps.app import App
 from .sub_agents.planner import planner_agent
 from .sub_agents.explorer import explorer_agent
@@ -12,6 +13,19 @@ from .tools.map_control import map_control
 from .tools.mongo_tools import load_user_profile
 from .tools.pipeline_tool import HodariPipelineTool
 from .plugins.profiling_plugin import create_profiling_plugin, profiling_enabled
+
+
+def _context_cache_config() -> ContextCacheConfig | None:
+    # Context caching requires Vertex AI — not available with AI Studio keys.
+    use_vertex = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE"
+    enabled = os.getenv("HODARI_CONTEXT_CACHE", "1" if use_vertex else "0")
+    if not use_vertex or enabled.lower() in ("0", "false", "no"):
+        return None
+    return ContextCacheConfig(
+        ttl_seconds=3600,   # 1 hour — agent instructions are stable
+        cache_intervals=20, # reuse cache for 20 invocations before refresh
+        min_tokens=1024,    # skip caching for tiny requests
+    )
 
 # Planner → Explorer → Itinerary, guaranteed in order.
 # This description is what the orchestrator's LLM reads when deciding whether to
@@ -197,4 +211,9 @@ root_agent = LlmAgent(
 )
 
 _plugins = [create_profiling_plugin()] if profiling_enabled() else []
-app = App(name="hodari", root_agent=root_agent, plugins=_plugins)
+app = App(
+    name="hodari",
+    root_agent=root_agent,
+    plugins=_plugins,
+    context_cache_config=_context_cache_config(),
+)

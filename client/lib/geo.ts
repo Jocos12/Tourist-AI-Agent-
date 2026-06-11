@@ -55,9 +55,24 @@ export function requestUserLocation(): Promise<LatLng | null> {
  * When places load, MapBounds fitBounds overrides this to show pins + user.
  */
 export function defaultMapCenter(
-  _markers: LatLng[],
+  markers: LatLng[],
   userLocation: LatLng | null,
 ): LatLng {
   if (userLocation && isValidCoord(userLocation)) return userLocation
+  const first = markers.find(isValidCoord)
+  if (first) return first
   return SF_BAY_CENTER
+}
+
+/** Skip fitting user + pins when GPS is far from results (avoids country-level zoom). */
+export function shouldIncludeUserInBounds(
+  user: LatLng | null,
+  markers: LatLng[],
+  maxKm = 25,
+): boolean {
+  if (!user || !isValidCoord(user) || markers.length === 0) return false
+  const valid = markers.filter(isValidCoord)
+  if (valid.length === 0) return false
+  const nearest = Math.min(...valid.map((m) => distanceKm(user, m)))
+  return nearest <= maxKm
 }

@@ -2,7 +2,8 @@ import { findPlaceIndexInText } from './mapIntents'
 import type { Itinerary, Place } from './types'
 import type { LatLng } from './geo'
 
-export type TravelMode = 'WALK' | 'DRIVE'
+export type { TravelMode } from './routing'
+import type { TravelMode } from './routing'
 
 export type MapAction =
   | { op: 'hide_user_location' }
@@ -26,6 +27,99 @@ export interface MapActionContext {
   places: Place[]
   itinerary: Itinerary | null
   activeStop: number | null
+  /** Raw session payloads — used when React state is not hydrated yet */
+  sessionCandidates?: unknown
+  sessionItinerary?: unknown
+  intentType?: string
+}
+
+function unwrapPlaceList(parsed: unknown): unknown[] {
+  if (Array.isArray(parsed)) return parsed
+  if (parsed && typeof parsed === 'object') {
+    const o = parsed as Record<string, unknown>
+    for (const key of ['places', 'candidates', 'results', 'items']) {
+      if (Array.isArray(o[key])) return o[key] as unknown[]
+    }
+  }
+  return []
+}
+
+function normalizePlace(raw: unknown): Place | null {
+  if (!raw || typeof raw !== 'object') return null
+  const p = raw as Record<string, unknown>
+  let coordinates = p.coordinates as Place['coordinates'] | undefined
+  if (!coordinates && typeof p.lat === 'number' && typeof p.lng === 'number') {
+    coordinates = { lat: p.lat, lng: p.lng }
+  }
+  if (!coordinates || typeof coordinates.lat !== 'number' || typeof coordinates.lng !== 'number') {
+    return null
+  }
+  const placeId = p.place_id ?? p.id ?? p.name
+  const name = p.name
+  if (!placeId || !name) return null
+  return {
+    place_id: String(placeId),
+    name: String(name),
+    address: String(p.address ?? ''),
+    coordinates,
+    categories: Array.isArray(p.categories) ? (p.categories as string[]) : [],
+    rating: typeof p.rating === 'number' ? p.rating : undefined,
+    price_level: typeof p.price_level === 'string' ? p.price_level : undefined,
+    summary: typeof p.summary === 'string' ? p.summary : undefined,
+    maps_url: typeof p.maps_url === 'string' ? p.maps_url : undefined,
+    photo_url: typeof p.photo_url === 'string' ? p.photo_url : undefined,
+    photo_reference: typeof p.photo_reference === 'string' ? p.photo_reference : undefined,
+    photos: Array.isArray(p.photos)
+      ? (p.photos as unknown[]).filter((x): x is string => typeof x === 'string')
+      : undefined,
+    personalization_score: 0,
+  } as Place & { personalization_score?: number }
+}
+
+/** Parse candidates/places from agent session state (string, array, or wrapped object). */
+export function parseSessionPlaces(raw: unknown): Place[] {
+  if (!raw) return []
+  try {
+    let parsed: unknown = raw
+    if (typeof raw === 'string') {
+      const clean = raw
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim()
+      if (!clean || clean === '[]' || clean === '""') return []
+      parsed = JSON.parse(clean)
+      if (typeof parsed === 'string') {
+        const inner = parsed.trim()
+        if (inner && inner !== '[]') parsed = JSON.parse(inner)
+      }
+    }
+    const list = unwrapPlaceList(parsed)
+    return list.map(normalizePlace).filter((p): p is Place => p !== null)
+  } catch {
+    return []
+  }
+}
+
+export function parseSessionItinerary(raw: unknown): Itinerary | null {
+  if (!raw) return null
+  try {
+    let parsed: unknown = raw
+    if (typeof raw === 'string') {
+      const clean = raw
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim()
+      if (!clean || clean === '""' || clean === '{}') return null
+      parsed = JSON.parse(clean)
+    }
+    const it = parsed as Itinerary
+    if (!Array.isArray(it?.stops) || it.stops.length === 0) return null
+    return it
+  } catch {
+    return null
+  }
 }
 
 export interface MapActionEffects {
@@ -83,7 +177,25 @@ function visiblePlaces(ctx: MapActionContext): Place[] {
       categories: [] as string[],
     }))
   }
-  return ctx.places
+  if (ctx.places.length > 0) return ctx.places
+
+  const sessionPlaces = parseSessionPlaces(ctx.sessionCandidates)
+  if (sessionPlaces.length > 0) {
+    console.log('[hodari:mapActions] resolved places from sessionCandidates:', sessionPlaces.length)
+    return sessionPlaces
+  }
+
+  const sessionItin = parseSessionItinerary(ctx.sessionItinerary)
+  if (sessionItin?.stops?.length && ctx.intentType !== 'LIST_DISCOVERY') {
+    console.log('[hodari:mapActions] resolved places from sessionItinerary:', sessionItin.stops.length)
+    return sessionItin.stops.map((s) => ({
+      ...s,
+      personalization_score: 0,
+      categories: [] as string[],
+    }))
+  }
+
+  return []
 }
 
 function resolveIndex(
@@ -111,8 +223,27 @@ export function applyMapActions(
   actions: MapAction[],
   ctx: MapActionContext,
 ): MapActionEffects {
+  const resolvedList = visiblePlaces(ctx)
+
+  // Session places may arrive before React state hydrates — write into ctx now.
+  if (!ctx.itinerary?.stops?.length && resolvedList.length > 0) {
+    ctx.places = resolvedList
+  }
+  console.log('[map] places saved to ctx:', ctx.places?.length ?? 0)
+
+  if (actions.length > 0) {
+    console.log(
+      '[hodari:mapActions] dispatch',
+      actions.map((a) => a.op),
+      '| places in ctx:',
+      ctx.places.length,
+      '| itinerary stops:',
+      ctx.itinerary?.stops?.length ?? 0,
+    )
+  }
+
   const effects: MapActionEffects = {}
-  const list = visiblePlaces(ctx)
+  const list = ctx.places.length > 0 ? ctx.places : resolvedList
   let active = ctx.activeStop
 
   for (const action of actions) {
@@ -123,8 +254,11 @@ export function applyMapActions(
         effects.customRoute = null
         break
       case 'show_user_location':
+        console.log('[map] show_user_location triggered')
         effects.showUserOnMap = true
         effects.suppressGpsContext = false
+        effects.mapOpen = true
+        effects.mapZoomFocus = true
         break
       case 'open_map':
         effects.mapOpen = true
@@ -196,6 +330,24 @@ export function applyMapActions(
       default:
         break
     }
+  }
+
+  const opensMap = actions.some(
+    (a) =>
+      a.op === 'open_map' ||
+      a.op === 'focus_place' ||
+      a.op === 'route' ||
+      a.op === 'keep_only' ||
+      a.op === 'show_user_location',
+  )
+  if (opensMap && effects.places === undefined && list.length > 0 && !ctx.itinerary?.stops?.length) {
+    effects.places = list
+    ctx.places = list
+    console.log('[map] places saved to ctx:', ctx.places.length)
+  }
+
+  if (actions.length > 0) {
+    console.log('[hodari:mapActions] effects →', effects)
   }
 
   return effects

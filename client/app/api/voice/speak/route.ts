@@ -36,8 +36,14 @@ function pcmToWav(pcm: Buffer, sampleRate: number, channels = 1, bits = 16): Buf
 }
 
 export async function POST(req: NextRequest) {
+  const audioHeaders = {
+    'Accept-Ranges': 'none',
+    'Cache-Control': 'no-store',
+  }
+
   if (!genaiConfigured()) {
-    return NextResponse.json({ error: genaiMissingHint() }, { status: 501 })
+    console.warn('speak: Gemini not configured —', genaiMissingHint())
+    return NextResponse.json({ error: 'TTS not configured', fallback: 'browser' }, { status: 503 })
   }
   let body: { text?: string; voice?: string }
   try {
@@ -69,7 +75,11 @@ export async function POST(req: NextRequest) {
     const pcm = Buffer.from(audio.data, 'base64')
     const wav = pcmToWav(pcm, rateFromMime(audio.mimeType ?? undefined))
     return new Response(new Uint8Array(wav), {
-      headers: { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' },
+      headers: {
+        'Content-Type': 'audio/wav',
+        'Content-Length': String(wav.length),
+        ...audioHeaders,
+      },
     })
   } catch (e) {
     console.error('speak failed:', e)
