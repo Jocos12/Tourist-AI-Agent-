@@ -12,9 +12,13 @@ import { GoogleGenAI } from '@google/genai'
 //   • Developer API (default) — a GEMINI_API_KEY from AI Studio. Has its own
 //     separate prepay wallet (NOT funded by Cloud credits).
 
-const USE_VERTEX = /^true$/i.test(process.env.GOOGLE_GENAI_USE_VERTEXAI ?? '')
 const API_KEY = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY
 const PROJECT = process.env.GOOGLE_CLOUD_PROJECT
+const VERTEX_FLAG = process.env.GOOGLE_GENAI_USE_VERTEXAI
+const USE_VERTEX =
+  VERTEX_FLAG === undefined || VERTEX_FLAG === ''
+    ? !!PROJECT
+    : /^true$/i.test(VERTEX_FLAG)
 // Voice uses Gemini 2.5 models (STT + TTS), which are served from REGIONAL
 // endpoints — unlike the agents' Gemini 3.x (global-only). So default to a
 // region. Override with GEMINI_VOICE_LOCATION if needed.

@@ -13,6 +13,11 @@ export interface Place {
   price_level?: string
   summary?: string
   maps_url?: string
+  /** Direct image URL when available from search/backend */
+  photo_url?: string
+  /** Legacy photo references or absolute URLs */
+  photos?: string[]
+  photo_reference?: string
 }
 
 export interface TravelLeg {
@@ -43,6 +48,8 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  places?: Place[]
+  itinerary?: Itinerary | null
 }
 
 export type StreamChunk =

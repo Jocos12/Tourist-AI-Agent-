@@ -23,13 +23,15 @@ export function isSpeechOutputSupported(): boolean {
 
 // ── Voice activity broadcast (drives the reactive UI bubble) ─────────────────
 
-export type VoiceState = 'listening' | 'thinking' | 'speaking'
+export type VoiceState = 'listening' | 'thinking' | 'speaking' | 'paused'
 export type VoiceActivity = 'idle' | VoiceState
 type ActivityListener = (state: VoiceActivity, level: number) => void
 type CaptionListener = (caption: string) => void
+type LiveTranscriptListener = (text: string) => void
 
 const activityListeners = new Set<ActivityListener>()
 const captionListeners = new Set<CaptionListener>()
+const liveTranscriptListeners = new Set<LiveTranscriptListener>()
 let activityState: VoiceActivity = 'idle'
 let activityLevel = 0
 let currentCaption = ''
@@ -46,6 +48,15 @@ export function subscribeVoiceCaptions(cb: CaptionListener): () => void {
   captionListeners.add(cb)
   cb(currentCaption)
   return () => { captionListeners.delete(cb) }
+}
+
+export function subscribeLiveTranscript(cb: LiveTranscriptListener): () => void {
+  liveTranscriptListeners.add(cb)
+  return () => { liveTranscriptListeners.delete(cb) }
+}
+
+function emitLiveTranscript(text: string): void {
+  liveTranscriptListeners.forEach((l) => l(text))
 }
 
 function emitCaption(caption: string): void {
@@ -135,6 +146,7 @@ type BrowserSpeechRecognition = {
   onresult: ((event: { results: { length: number; [i: number]: { 0: { transcript: string } } } }) => void) | null
   onerror: (() => void) | null
   onend: (() => void) | null
+  onstart: (() => void) | null
   start: () => void
   stop: () => void
 }
@@ -195,6 +207,7 @@ async function startBrowserSpeechRecording(): Promise<Recorder> {
       parts.push(event.results[i][0].transcript)
     }
     transcript = parts.join(' ').trim()
+    emitLiveTranscript(transcript)
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -289,9 +302,19 @@ async function speakWithBrowser(text: string): Promise<void> {
   if (!('speechSynthesis' in window)) return
   await new Promise<void>((resolve) => {
     const utterance = new SpeechSynthesisUtterance(text)
-    utterance.onend = () => resolve()
-    utterance.onerror = () => resolve()
-    animateCaptions(text, Math.max(1500, text.length * 45))
+    utterance.lang = navigator.language || 'en-US'
+    utterance.rate = 1
+    utterance.onend = () => {
+      emitCaption('')
+      emitActivity('idle', 0)
+      resolve()
+    }
+    utterance.onerror = () => {
+      emitCaption('')
+      emitActivity('idle', 0)
+      resolve()
+    }
+    animateCaptions(text, Math.max(2000, text.length * 48))
     emitActivity('speaking', 0.35)
     window.speechSynthesis.cancel()
     window.speechSynthesis.speak(utterance)
@@ -407,6 +430,15 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
 
 // ── Speech output (Gemini TTS -> play) ───────────────────────────────────────
 
+/** Natural speech intro: repeat the user's words, then Hodari's answer. */
+export function formatSpokenReply(userText: string, assistantMarkdown: string): string {
+  const question = toSpeakable(userText)
+  const answer = toSpeakable(assistantMarkdown)
+  if (!question) return answer
+  if (!answer) return `You said: ${question}.`
+  return `You said: ${question}. ${answer}`
+}
+
 // Strip markdown / emoji so the spoken text sounds natural.
 function toSpeakable(markdown: string): string {
   return markdown
@@ -426,15 +458,22 @@ function toSpeakable(markdown: string): string {
 let currentAudio: HTMLAudioElement | null = null
 let currentCaptionRaf = 0
 let speechCancelled = false
+let speechPaused = false
 let playbackCancelResolve: (() => void) | null = null
 
-/** Speak text aloud via Gemini TTS. Cancels any in-flight playback first. */
+/** Speak Hodari's reply aloud, echoing what the user said first. */
+export async function speakReply(userText: string, assistantMarkdown: string): Promise<void> {
+  return speak(formatSpokenReply(userText, assistantMarkdown))
+}
+
+/** Speak text aloud via Gemini TTS (browser SpeechSynthesis as fallback). */
 export async function speak(markdown: string): Promise<void> {
   if (!isSpeechOutputSupported()) return
   const text = toSpeakable(markdown)
   if (!text) return
   cancelSpeech()
   speechCancelled = false
+  speechPaused = false
 
   try {
     const chunks = chunkSpeakableText(text)
@@ -448,27 +487,71 @@ export async function speak(markdown: string): Promise<void> {
         body: JSON.stringify({ text: chunk }),
       })
       if (!res.ok) continue
-      const blob = new Blob([await res.arrayBuffer()], { type: 'audio/wav' })
+      const buf = await res.arrayBuffer()
+      if (buf.byteLength < 128) continue
+      const blob = new Blob([buf], { type: 'audio/wav' })
       spoken = `${spoken} ${chunk}`.trim()
       playedAny = true
       await playAudioBlob(blob, spoken)
       if (speechCancelled) break
     }
     if (!speechCancelled && !playedAny) {
-      await speakWithBrowser(text)
+      console.warn(
+        '[voice] Vertex/Gemini TTS unavailable — set GOOGLE_GENAI_USE_VERTEXAI=TRUE, ' +
+          'GOOGLE_CLOUD_PROJECT, and run: gcloud auth application-default login',
+      )
     }
-  } catch {
-    if (!speechCancelled) await speakWithBrowser(text)
+  } catch (err) {
+    console.warn('[voice] TTS request failed:', err)
   } finally {
-    if (!currentAudio) {
+    if (!speechCancelled && !speechPaused) {
       emitCaption('')
       emitActivity('idle', 0)
     }
   }
 }
 
+/** Pause Hodari's speech without cancelling the session or losing context. */
+export function pauseSpeech(): boolean {
+  if (!currentAudio || speechCancelled) return false
+  speechPaused = true
+  try {
+    currentAudio.pause()
+  } catch {
+    return false
+  }
+  stopOutputMeter()
+  emitActivity('paused', 0)
+  return true
+}
+
+/** Resume speech after pause. */
+export function resumeSpeech(): boolean {
+  if (!currentAudio || speechCancelled || !speechPaused) return false
+  speechPaused = false
+  void currentAudio.play().then(() => {
+    if (currentAudio && !speechCancelled) {
+      emitActivity('speaking', 0.4)
+      startOutputMeter(currentAudio)
+    }
+  }).catch(() => {
+    speechPaused = false
+  })
+  return true
+}
+
+/** Stop speech immediately (alias used by voice UI controls). */
+export function stopSpeech(): void {
+  cancelSpeech()
+}
+
+export function isSpeechPaused(): boolean {
+  return speechPaused
+}
+
 export function cancelSpeech(): void {
   speechCancelled = true
+  speechPaused = false
   cancelAnimationFrame(currentCaptionRaf)
   currentCaptionRaf = 0
   stopOutputMeter()
@@ -529,10 +612,13 @@ function playAudioBlob(blob: Blob, captionText: string): Promise<void> {
     audio.onloadedmetadata = () => {
       animateCaptions(captionText, Number.isFinite(audio.duration) ? audio.duration * 1000 : Math.max(1500, captionText.length * 45))
     }
-    audio.onended = cleanup
+    audio.onended = () => {
+      speechPaused = false
+      cleanup()
+    }
     audio.onerror = cleanup
     audio.onplay = () => {
-      if (currentAudio === audio) {
+      if (currentAudio === audio && !speechPaused) {
         emitActivity('speaking', 0.4)
         startOutputMeter(audio)
       }

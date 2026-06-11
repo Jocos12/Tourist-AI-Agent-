@@ -1,25 +1,31 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Clock, ExternalLink, MapPin, Star } from 'lucide-react'
+import type { Place } from '@/lib/types'
+
+const PLACES_NEW_ENABLED = process.env.NEXT_PUBLIC_PLACES_API_NEW === '1'
 
 interface PlaceData {
   name: string
   rating?: number
   ratingCount?: number
   priceSymbol?: string
-  photoUrl?: string
+  photoUrls: string[]
   address?: string
   todayHours?: string
   summary?: string
   website?: string
   phone?: string
   mapsUri?: string
+  isOpen?: boolean | null
 }
 
 interface Props {
   placeId: string
   fallbackName: string
   fallbackMapsUrl: string
+  fallbackPlace?: Place | null
   onClose: () => void
 }
 
@@ -29,150 +35,308 @@ const PRICE_SYMBOL: Record<string, string> = {
   MODERATE: '$$',
   EXPENSIVE: '$$$',
   VERY_EXPENSIVE: '$$$$',
+  PRICE_LEVEL_FREE: 'Free',
+  PRICE_LEVEL_INEXPENSIVE: '$',
+  PRICE_LEVEL_MODERATE: '$$',
+  PRICE_LEVEL_EXPENSIVE: '$$$',
+  PRICE_LEVEL_VERY_EXPENSIVE: '$$$$',
+  '0': 'Free',
+  '1': '$',
+  '2': '$$',
+  '3': '$$$',
+  '4': '$$$$',
 }
 
-// In-app place details — fetched from the Google Places API (New) via Maps JS by
-// place_id, so the user sees the photo + details inside Hodari instead of being
-// sent out to Google Maps.
-export function PlaceDetailsPanel({ placeId, fallbackName, fallbackMapsUrl, onClose }: Props) {
-  const [data, setData] = useState<PlaceData | null>(null)
+function priceLabel(level?: string | number): string | undefined {
+  if (level == null) return undefined
+  return PRICE_SYMBOL[String(level)] ?? undefined
+}
+
+function summaryText(value: unknown): string | undefined {
+  if (!value) return undefined
+  if (typeof value === 'string') return value
+  if (typeof value === 'object' && value !== null && 'text' in value) {
+    const t = (value as { text?: string }).text
+    return typeof t === 'string' ? t : undefined
+  }
+  return undefined
+}
+
+function buildFromFallback(place: Place, mapsUrl: string): PlaceData {
+  const photoUrls: string[] = []
+  if (place.place_id && !place.place_id.startsWith('__')) {
+    // Proxied URLs loaded async; keep refs as fallback paths
+    for (const p of place.photos ?? []) {
+      if (p.startsWith('/api/')) photoUrls.push(p)
+    }
+  }
+  return {
+    name: place.name,
+    rating: place.rating,
+    priceSymbol: priceLabel(place.price_level),
+    photoUrls,
+    address: place.address || undefined,
+    summary: place.summary || undefined,
+    mapsUri: place.maps_url || mapsUrl,
+    isOpen: null,
+  }
+}
+
+async function fetchPlaceDetailsApi(placeId: string): Promise<Partial<PlaceData> | null> {
+  try {
+    const res = await fetch(`/api/place-photos?placeId=${encodeURIComponent(placeId)}`)
+    if (!res.ok) return null
+    const data = await res.json()
+    const hours = data.opening_hours?.weekday_text as string[] | undefined
+    const todayIdx = (new Date().getDay() + 6) % 7
+    return {
+      name: data.name,
+      rating: data.rating,
+      priceSymbol: priceLabel(data.priceLevel ?? data.price_level),
+      photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls : [],
+      address: data.address ?? data.formatted_address,
+      todayHours: hours?.[todayIdx],
+      mapsUri: data.maps_url,
+      isOpen: data.isOpen ?? data.opening_hours?.open_now ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
+export function PlaceDetailsPanel({
+  placeId,
+  fallbackName,
+  fallbackMapsUrl,
+  fallbackPlace,
+  onClose,
+}: Props) {
+  const initial = useMemo(
+    () => (fallbackPlace ? buildFromFallback(fallbackPlace, fallbackMapsUrl) : null),
+    [fallbackPlace, fallbackMapsUrl],
+  )
+  const [data, setData] = useState<PlaceData | null>(initial)
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading')
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
-      try {
-        await google.maps.importLibrary('places')
-        const place = new google.maps.places.Place({ id: placeId })
-        await place.fetchFields({
-          fields: [
-            'displayName', 'rating', 'userRatingCount', 'priceLevel', 'photos',
-            'formattedAddress', 'regularOpeningHours', 'websiteURI',
-            'googleMapsURI', 'nationalPhoneNumber', 'editorialSummary',
-          ],
-        })
-        if (cancelled) return
+      setStatus('loading')
+      const base = fallbackPlace
+        ? buildFromFallback(fallbackPlace, fallbackMapsUrl)
+        : { name: fallbackName, photoUrls: [], mapsUri: fallbackMapsUrl }
 
-        const hours = place.regularOpeningHours
-        const todayIdx = (new Date().getDay() + 6) % 7 // JS Sunday=0 -> Places Monday=0
-        setData({
-          name: place.displayName ?? fallbackName,
-          rating: place.rating ?? undefined,
-          ratingCount: place.userRatingCount ?? undefined,
-          priceSymbol: place.priceLevel ? PRICE_SYMBOL[place.priceLevel] : undefined,
-          photoUrl: place.photos?.[0]?.getURI({ maxWidth: 720, maxHeight: 420 }),
-          address: place.formattedAddress ?? undefined,
-          todayHours: hours?.weekdayDescriptions?.[todayIdx],
-          summary: place.editorialSummary ?? undefined,
-          website: place.websiteURI ?? undefined,
-          phone: place.nationalPhoneNumber ?? undefined,
-          mapsUri: place.googleMapsURI ?? fallbackMapsUrl,
-        })
+      const api = await fetchPlaceDetailsApi(placeId)
+      if (cancelled) return
+
+      const merged: PlaceData = {
+        name: api?.name ?? base.name ?? fallbackName,
+        rating: api?.rating ?? base.rating,
+        ratingCount: undefined,
+        priceSymbol: api?.priceSymbol ?? base.priceSymbol,
+        photoUrls: api?.photoUrls?.length ? api.photoUrls : base.photoUrls,
+        address: api?.address ?? base.address,
+        todayHours: api?.todayHours ?? base.todayHours,
+        summary: base.summary ?? api?.summary,
+        website: base.website,
+        phone: base.phone,
+        mapsUri: api?.mapsUri ?? base.mapsUri ?? fallbackMapsUrl,
+        isOpen: api?.isOpen ?? base.isOpen ?? null,
+      }
+
+      if (PLACES_NEW_ENABLED && typeof google !== 'undefined' && google.maps?.importLibrary) {
+        try {
+          await google.maps.importLibrary('places')
+          const place = new google.maps.places.Place({ id: placeId })
+          await place.fetchFields({
+            fields: [
+              'displayName', 'rating', 'userRatingCount', 'priceLevel', 'photos',
+              'formattedAddress', 'regularOpeningHours', 'websiteURI',
+              'googleMapsURI', 'nationalPhoneNumber', 'editorialSummary',
+            ],
+          })
+          if (!cancelled) {
+            const hours = place.regularOpeningHours
+            const todayIdx = (new Date().getDay() + 6) % 7
+            merged.name = place.displayName ?? merged.name
+            merged.rating = place.rating ?? merged.rating
+            merged.ratingCount = place.userRatingCount ?? undefined
+            merged.priceSymbol = place.priceLevel ? priceLabel(place.priceLevel) : merged.priceSymbol
+            if (merged.photoUrls.length === 0 && place.photos?.length) {
+              merged.photoUrls = place.photos
+                .map((p) => {
+                  try {
+                    const uri = p.getURI({ maxWidth: 720, maxHeight: 420 })
+                    return `/api/place-photo?url=${encodeURIComponent(uri)}`
+                  } catch {
+                    return null
+                  }
+                })
+                .filter((u): u is string => !!u)
+            }
+            merged.address = place.formattedAddress ?? merged.address
+            merged.todayHours = hours?.weekdayDescriptions?.[todayIdx] ?? merged.todayHours
+            merged.summary = summaryText(place.editorialSummary) ?? merged.summary
+            merged.website = place.websiteURI ?? merged.website
+            merged.phone = place.nationalPhoneNumber ?? merged.phone
+            merged.mapsUri = place.googleMapsURI ?? merged.mapsUri
+          }
+        } catch {
+          /* keep merged API + fallback data */
+        }
+      }
+
+      if (!cancelled) {
+        setData(merged)
         setStatus('ok')
-      } catch (e) {
-        console.error('Place details failed:', e)
-        if (!cancelled) setStatus('error')
       }
     }
 
-    if (typeof google !== 'undefined' && typeof google.maps?.importLibrary === 'function') load()
-    else setStatus('error')
+    void load()
     return () => { cancelled = true }
-  }, [placeId, fallbackName, fallbackMapsUrl])
+  }, [placeId, fallbackName, fallbackMapsUrl, fallbackPlace])
+
+  const displayName = data?.name ?? fallbackName
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-up" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
-      <div className="relative w-full max-w-md glass rounded-2xl overflow-hidden shadow-2xl shadow-black/40 max-h-[88vh] flex flex-col">
-        {/* Photo / header */}
-        <div className="relative h-44 shrink-0 bg-gradient-to-br from-gold/20 to-surface">
-          {data?.photoUrl ? (
+      <div className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-header)] shadow-2xl">
+        <div className="relative h-44 shrink-0 overflow-hidden bg-gradient-to-br from-amber-50 to-[#fdf3ee] dark:from-amber-950/40 dark:to-slate-900">
+          {data?.photoUrls?.length ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={data.photoUrl} alt={data.name} className="w-full h-full object-cover" />
+            <img
+              src={data.photoUrls[0]}
+              alt={displayName}
+              className="h-full w-full object-cover"
+              loading="lazy"
+            />
           ) : (
-            <div className="w-full h-full flex items-center justify-center text-gold/40">
-              <svg viewBox="0 0 24 24" className="w-12 h-12 fill-current"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z" /></svg>
+            <div className="flex h-full w-full items-center justify-center">
+              <span className="font-display text-4xl font-semibold text-amber-600/60">
+                {displayName.split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase()}
+              </span>
             </div>
           )}
           <button
+            type="button"
             onClick={onClose}
             title="Close"
-            className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/50 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/70 transition-colors"
+            className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm transition-colors hover:bg-black/70"
           >
-            <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
+            <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
           </button>
         </div>
 
-        {/* Body */}
-        <div className="p-5 overflow-y-auto scrollbar-hide">
-          <h2 className="font-display text-xl font-semibold text-text leading-tight">
-            {data?.name ?? fallbackName}
+        {data && data.photoUrls.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto border-b border-[var(--border)] px-3 py-2 scrollbar-hide">
+            {data.photoUrls.map((url, i) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={`${url}-${i}`}
+                src={url}
+                alt={`${displayName} photo ${i + 1}`}
+                className="h-14 w-20 shrink-0 rounded-lg object-cover"
+                loading="lazy"
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="scrollbar-hide overflow-y-auto p-5">
+          <h2 className="font-display text-xl font-semibold leading-tight text-[var(--text-primary)]">
+            {displayName}
           </h2>
 
           {status === 'loading' && (
-            <div className="flex items-center gap-2.5 mt-4">
+            <div className="mt-4 flex items-center gap-2.5">
               <div className="thinking-ring" />
-              <span className="font-mono text-[11px] text-text3 tracking-widest">loading details…</span>
+              <span className="text-[11px] tracking-wide text-[var(--text-secondary)]">Loading details…</span>
             </div>
-          )}
-
-          {status === 'error' && (
-            <p className="text-[13px] text-text3 mt-3 leading-relaxed">
-              Couldn&apos;t load live details (the Places API may not be enabled on the frontend key yet).
-            </p>
           )}
 
           {status === 'ok' && data && (
             <>
-              {/* Rating · price · open-now */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 {data.rating != null && (
-                  <span className="flex items-center gap-1 text-[13px] text-text">
-                    <span className="text-gold">★</span>{data.rating.toFixed(1)}
-                    {data.ratingCount != null && <span className="text-text3">({data.ratingCount.toLocaleString()})</span>}
+                  <span className="inline-flex items-center gap-1 text-[13px] text-[var(--text-primary)]">
+                    <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
+                    {data.rating.toFixed(1)}
+                    {data.ratingCount != null && (
+                      <span className="text-[var(--text-secondary)]">({data.ratingCount.toLocaleString()})</span>
+                    )}
                   </span>
                 )}
-                {data.priceSymbol && <span className="text-[13px] text-green font-medium">{data.priceSymbol}</span>}
+                {data.priceSymbol && (
+                  <span className="text-[13px] font-medium text-green-600">{data.priceSymbol}</span>
+                )}
+                {data.isOpen != null && (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      data.isOpen
+                        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                        : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                    }`}
+                  >
+                    {data.isOpen ? 'Open' : 'Closed'}
+                  </span>
+                )}
               </div>
 
               {data.summary && (
-                <p className="text-[13.5px] text-text2 leading-relaxed mt-3">{data.summary}</p>
+                <p className="mt-3 text-[13.5px] leading-relaxed text-[var(--text-secondary)]">{data.summary}</p>
               )}
 
               {data.todayHours && (
-                <p className="text-[12.5px] text-text3 mt-3 font-sans">{data.todayHours}</p>
+                <p className="mt-3 flex items-start gap-1.5 text-[12.5px] text-[var(--text-secondary)]">
+                  <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                  {data.todayHours}
+                </p>
               )}
 
               {data.address && (
-                <div className="flex items-start gap-2 mt-3 text-text2">
-                  <span className="text-gold/70 mt-0.5 shrink-0">
-                    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z" /></svg>
-                  </span>
+                <div className="mt-3 flex items-start gap-2 text-[var(--text-secondary)]">
+                  <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
                   <span className="text-[13px] leading-relaxed">{data.address}</span>
                 </div>
               )}
 
-              {/* Actions */}
-              <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-border/40">
+              {!data.summary && !data.address && !data.rating && (
+                <p className="mt-3 text-[13px] text-[var(--text-secondary)]">
+                  No extra details from Google yet — try asking Hodari about this place.
+                </p>
+              )}
+
+              <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4">
                 {data.website && (
-                  <a href={data.website} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-[12px] text-text2 hover:text-gold border border-border hover:border-gold/40 rounded-full px-3 py-1.5 transition-all">
+                  <a
+                    href={data.website}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-full border border-[var(--border)] px-3 py-1.5 text-[12px] text-[var(--text-secondary)] transition-colors hover:border-amber-400 hover:text-amber-600"
+                  >
                     Website
                   </a>
                 )}
                 {data.phone && (
-                  <a href={`tel:${data.phone}`}
-                    className="flex items-center gap-1.5 text-[12px] text-text2 hover:text-gold border border-border hover:border-gold/40 rounded-full px-3 py-1.5 transition-all">
+                  <a
+                    href={`tel:${data.phone}`}
+                    className="rounded-full border border-[var(--border)] px-3 py-1.5 text-[12px] text-[var(--text-secondary)] transition-colors hover:border-amber-400 hover:text-amber-600"
+                  >
                     {data.phone}
                   </a>
                 )}
                 {data.mapsUri && (
-                  <a href={data.mapsUri} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-[11px] text-text3 hover:text-gold ml-auto transition-colors font-mono tracking-wider uppercase">
+                  <a
+                    href={data.mapsUri}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:text-amber-600"
+                  >
+                    <ExternalLink className="h-3 w-3" />
                     Google Maps
-                    <svg viewBox="0 0 24 24" className="w-3 h-3 fill-current"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM5 5h5V3H3v18h18v-7h-2v5H5V5z" /></svg>
                   </a>
                 )}
               </div>

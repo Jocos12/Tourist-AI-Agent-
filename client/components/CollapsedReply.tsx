@@ -1,51 +1,107 @@
 'use client'
 
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { ChevronDown } from 'lucide-react'
 
-interface Props {
+const LONG_LINE_THRESHOLD = 8
+const PREVIEW_LINES = 4
+
+function lineCount(text: string): number {
+  return text.split('\n').length
+}
+
+function previewText(text: string): string {
+  const lines = text.split('\n')
+  if (lines.length <= PREVIEW_LINES) return `${text.slice(0, 400).trim()}…`
+  return `${lines.slice(0, PREVIEW_LINES).join('\n').trim()}…`
+}
+
+interface CollapsibleMessageProps {
+  content: string
+  streaming?: boolean
+  showCaret?: boolean
+}
+
+/** Long assistant replies — full text by default; collapse only past 8 lines. */
+export function CollapsibleMessage({ content, streaming = false, showCaret = false }: CollapsibleMessageProps) {
+  const reduced = useReducedMotion()
+  const [expanded, setExpanded] = useState(true)
+  const long = lineCount(content) > LONG_LINE_THRESHOLD
+  const visible = !long || expanded ? content : previewText(content)
+
+  return (
+    <div>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={expanded ? 'open' : 'closed'}
+          initial={reduced ? false : { height: 'auto', opacity: 0.85 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={reduced ? undefined : { opacity: 0.85 }}
+          transition={{ duration: reduced ? 0 : 0.25, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <div className="prose-hodari w-full text-left text-[13px] leading-relaxed text-[var(--text-primary)]">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{visible}</ReactMarkdown>
+            {showCaret && <span className="stream-caret stream-caret-fade" aria-hidden />}
+          </div>
+        </motion.div>
+      </AnimatePresence>
+      {long && !streaming && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-2 flex items-center gap-1 text-[11px] font-medium text-amber-600 hover:text-amber-700 dark:text-amber-500"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+          <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+interface CollapsedReplyProps {
   content: string | null
   loading: boolean
   streaming: boolean
   onOpen: () => void
+  /** Voice + map uses a separate bottom-right Open chat button. */
+  hideOpenChat?: boolean
 }
 
-// Compact floating card shown when the full chat is collapsed — surfaces Hodari's
-// latest reply (and live progress) so the user can talk by voice and still see the
-// response without reopening the whole chat panel.
-export function CollapsedReply({ content, loading, streaming, onOpen }: Props) {
+// Compact floating card when chat is collapsed over the map.
+export function CollapsedReply({ content, loading, streaming, onOpen, hideOpenChat }: CollapsedReplyProps) {
   const showThinking = loading && !streaming && !content
 
   return (
-    <div className="absolute top-4 left-4 z-20 w-[340px] max-w-[80vw] glass rounded-2xl overflow-hidden animate-fade-up">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/50">
-        <span className="font-mono text-[10px] text-gold tracking-[0.15em] uppercase">Hodari</span>
-        <button
-          onClick={onOpen}
-          title="Open full chat"
-          className="flex items-center gap-1.5 text-text3 hover:text-gold transition-colors"
-        >
-          <span className="font-mono text-[9px] tracking-wider uppercase">Open chat</span>
-          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current">
-            <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
-          </svg>
-        </button>
+    <div className="pointer-events-auto absolute left-4 top-4 z-20 w-[340px] max-w-[80vw] animate-fade-up overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-header)]/95 shadow-lg backdrop-blur-md">
+      <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
+        <span className="text-[11px] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400">Hodari</span>
+        {!hideOpenChat && (
+          <button
+            type="button"
+            onClick={onOpen}
+            title="Open full chat"
+            className="text-[11px] text-gray-500 transition-colors hover:text-amber-600 dark:text-gray-400"
+          >
+            Open chat
+          </button>
+        )}
       </div>
 
-      <div className="px-4 py-3 max-h-[42vh] overflow-y-auto scrollbar-hide">
+      <div className="scrollbar-hide max-h-[42vh] overflow-y-auto px-4 py-3">
         {showThinking ? (
           <div className="flex items-center gap-2.5 py-1">
             <div className="thinking-ring" />
-            <span className="font-mono text-[11px] text-text3 tracking-widest">thinking…</span>
+            <span className="text-[11px] tracking-wide text-gray-500">Thinking…</span>
           </div>
         ) : content ? (
-          <div className="prose-hodari text-[13.5px] text-text leading-relaxed">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-            {streaming && <span className="stream-caret" />}
-          </div>
+          <CollapsibleMessage content={content} streaming={streaming} showCaret={streaming} />
         ) : (
-          <p className="text-[12.5px] text-text3 leading-relaxed">
-            Tap the mic and ask me anything, your reply shows up here.
+          <p className="text-[13px] leading-relaxed text-gray-500">
+            Tap the mic and ask me anything — your reply shows up here.
           </p>
         )}
       </div>
