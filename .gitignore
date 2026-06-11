@@ -4,6 +4,22 @@
 *.jpeg
 image*
 
+# ...but shipped site assets are not screenshots
+!client/public/**/*.png
+!client/public/**/*.jpg
+!client/public/**/*.jpeg
+
+# Dependencies
+node_modules/
+
+# Local Claude Code settings
+.claude/
+
+# Local artefacts
+error01
+video_demo
+agents/hodari_probe_*.json
+
 # Playwright MCP artefacts
 .playwright-mcp/
 

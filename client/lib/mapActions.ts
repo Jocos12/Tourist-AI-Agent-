@@ -10,6 +10,9 @@ export type MapAction =
   | { op: 'show_user_location' }
   | { op: 'open_map' }
   | { op: 'close_map' }
+  | { op: 'expand_map' }
+  | { op: 'compact_map' }
+  | { op: 'chat_only' }
   | { op: 'clear_route' }
   | { op: 'focus_place'; place_index?: number; place_name?: string }
   | { op: 'keep_only'; place_index?: number; place_name?: string }
@@ -126,6 +129,7 @@ export interface MapActionEffects {
   showUserOnMap?: boolean
   suppressGpsContext?: boolean
   mapOpen?: boolean
+  mapExpanded?: boolean
   mapZoomFocus?: boolean
   activeStop?: number | null
   places?: Place[]
@@ -141,6 +145,9 @@ const VALID_OPS = new Set([
   'show_user_location',
   'open_map',
   'close_map',
+  'expand_map',
+  'compact_map',
+  'chat_only',
   'clear_route',
   'focus_place',
   'keep_only',
@@ -261,10 +268,18 @@ export function applyMapActions(
         effects.mapZoomFocus = true
         break
       case 'open_map':
+      case 'compact_map':
         effects.mapOpen = true
+        effects.mapExpanded = false
         break
+      case 'expand_map':
+        effects.mapOpen = true
+        effects.mapExpanded = true
+        break
+      case 'chat_only':
       case 'close_map':
         effects.mapOpen = false
+        effects.mapExpanded = false
         break
       case 'clear_route':
         effects.routeFromUser = false
@@ -335,6 +350,8 @@ export function applyMapActions(
   const opensMap = actions.some(
     (a) =>
       a.op === 'open_map' ||
+      a.op === 'compact_map' ||
+      a.op === 'expand_map' ||
       a.op === 'focus_place' ||
       a.op === 'route' ||
       a.op === 'keep_only' ||

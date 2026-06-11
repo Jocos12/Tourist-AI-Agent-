@@ -15,6 +15,9 @@ VALID_OPS = frozenset({
     "show_user_location",
     "open_map",
     "close_map",
+    "expand_map",
+    "compact_map",
+    "chat_only",
     "clear_route",
     "focus_place",
     "keep_only",
@@ -45,8 +48,11 @@ def map_control(
         actions: List of action objects. Supported ops:
             hide_user_location — hide the blue GPS dot; stop routing from GPS.
             show_user_location — show the GPS dot again.
-            open_map — open the map panel.
-            close_map — close the map panel.
+            open_map — open the compact map panel beside chat (map + place list).
+            compact_map — same as open_map (compact side panel, not full screen).
+            expand_map — full-screen map with resizable chat overlay on the left.
+            chat_only — hide the map and show chat only (same as close_map).
+            close_map — hide the map panel entirely.
             clear_route — remove any route line on the map.
             focus_place — zoom map to a place (place_index 0-based and/or place_name).
             keep_only — show a single pin (place_index and/or place_name).

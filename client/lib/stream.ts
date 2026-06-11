@@ -38,11 +38,13 @@ export async function* streamChat(
   message: string,
   userId: string,
   sessionId: string,
+  signal?: AbortSignal,
 ): AsyncGenerator<StreamChunk> {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, userId, sessionId }),
+    signal,
   })
 
   if (!res.ok || !res.body) {

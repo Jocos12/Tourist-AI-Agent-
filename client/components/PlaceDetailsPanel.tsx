@@ -97,6 +97,7 @@ async function fetchPlaceDetailsApi(placeId: string): Promise<Partial<PlaceData>
       address: data.address ?? data.formatted_address,
       todayHours: hours?.[todayIdx],
       mapsUri: data.maps_url,
+      website: typeof data.website === 'string' ? data.website : undefined,
       isOpen: data.isOpen ?? data.opening_hours?.open_now ?? null,
     }
   } catch {
@@ -198,6 +199,12 @@ export function PlaceDetailsPanel({
   }, [placeId, fallbackName, fallbackMapsUrl, fallbackPlace])
 
   const displayName = data?.name ?? fallbackName
+  const mapsLink =
+    data?.mapsUri ??
+    fallbackMapsUrl ??
+    (placeId && !placeId.startsWith('__')
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fallbackName)}&query_place_id=${encodeURIComponent(placeId)}`
+      : null)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-up" role="dialog" aria-modal="true">
@@ -310,6 +317,17 @@ export function PlaceDetailsPanel({
               )}
 
               <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4">
+                {mapsLink && (
+                  <a
+                    href={mapsLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-full bg-[#F56A00] px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-[#e05a1a]"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Open in Google Maps
+                  </a>
+                )}
                 {data.website && (
                   <a
                     href={data.website}
@@ -326,17 +344,6 @@ export function PlaceDetailsPanel({
                     className="rounded-full border border-[var(--border)] px-3 py-1.5 text-[12px] text-[var(--text-secondary)] transition-colors hover:border-amber-400 hover:text-amber-600"
                   >
                     {data.phone}
-                  </a>
-                )}
-                {data.mapsUri && (
-                  <a
-                    href={data.mapsUri}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-auto inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:text-amber-600"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    Google Maps
                   </a>
                 )}
               </div>

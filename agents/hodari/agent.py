@@ -154,6 +154,8 @@ do NOT call hodari_pipeline for these. The client executes your actions automati
 When to call map_control:
   • hide / show my location (GPS blue dot)
   • open or close the map panel
+  • compact map beside chat (open_map / compact_map) vs full-screen map (expand_map)
+  • chat-only mode with no map (chat_only / close_map)
   • zoom to a specific place (focus_place)
   • show only one pin (keep_only)
   • clear a route line (clear_route)
@@ -161,6 +163,12 @@ When to call map_control:
   • user browses another city while GPS is elsewhere (suppress_gps_context)
 
 Examples:
+  "show full map" / "expand the map" →
+    [{"op":"expand_map"}]
+  "compact map" / "map beside chat" / "small map" →
+    [{"op":"compact_map"}]
+  "chat only" / "hide the map" →
+    [{"op":"chat_only"}]
   "hide my location" →
     [{"op":"hide_user_location"},{"op":"clear_route"}]
   "route from the Louvre to Omusubi Gonbei, walking" →

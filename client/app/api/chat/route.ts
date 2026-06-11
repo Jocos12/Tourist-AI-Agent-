@@ -18,6 +18,8 @@ export async function POST(req: NextRequest) {
   const adkRes = await fetch(`${ADK_BASE}/run_sse`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    // Propagate client aborts (Stop button) so the upstream agent run is cancelled too.
+    signal: req.signal,
     body: JSON.stringify({
       app_name: APP_NAME,
       user_id: userId,

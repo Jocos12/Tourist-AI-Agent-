@@ -1,11 +1,10 @@
 'use client'
 
-import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
-import { APIProvider, Map, Marker, useApiIsLoaded, useMap } from '@vis.gl/react-google-maps'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { APIProvider, Map, AdvancedMarker, Pin, useMap } from '@vis.gl/react-google-maps'
 import { AlertCircle, ChevronLeft, ChevronDown, Loader2, MapPin, Maximize2, Minimize2, Star } from 'lucide-react'
 import type { ItineraryStop, Place, Theme } from '@/lib/types'
 import type { CustomRouteConfig, TravelMode } from '@/lib/mapActions'
-import { travelModeToRoutesApi } from '@/lib/directions'
 import {
   distanceKm,
   isValidCoord,
@@ -20,57 +19,6 @@ const KIGALI_DEFAULT: LatLng = { lat: -1.9441, lng: 30.0619 }
 const DEFAULT_ZOOM = 13
 
 type FitPadding = number | { top: number; right: number; bottom: number; left: number }
-
-interface ComputeRouteResult {
-  distance: string
-  duration: string
-  polyline: string
-}
-
-async function fetchComputeRoute(
-  origin: LatLng,
-  destination: LatLng,
-  travelMode: string,
-): Promise<ComputeRouteResult | null> {
-  try {
-    const res = await fetch('/api/directions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ origin, destination, travelMode }),
-    })
-    if (!res.ok) return null
-    return res.json()
-  } catch {
-    return null
-  }
-}
-
-function drawRoute(
-  mapInstance: google.maps.Map,
-  encodedPolyline: string,
-  existingPolyline: MutableRefObject<google.maps.Polyline | null>,
-  padding: FitPadding = { top: 40, right: 40, bottom: 40, left: 40 },
-): google.maps.LatLngBounds | null {
-  if (existingPolyline.current) {
-    existingPolyline.current.setMap(null)
-  }
-  if (!google.maps.geometry?.encoding) return null
-
-  const decodedPath = google.maps.geometry.encoding.decodePath(encodedPolyline)
-  existingPolyline.current = new google.maps.Polyline({
-    path: decodedPath,
-    geodesic: true,
-    strokeColor: ROUTE_ORANGE,
-    strokeOpacity: 0.9,
-    strokeWeight: 5,
-    map: mapInstance,
-  })
-
-  const bounds = new google.maps.LatLngBounds()
-  decodedPath.forEach((point) => bounds.extend(point))
-  mapInstance.fitBounds(bounds, padding)
-  return bounds
-}
 
 /** Standard light roadmap — no orange tint on land/water (orange only on route + pins). */
 const MAP_STYLES: google.maps.MapTypeStyle[] = [
@@ -151,41 +99,6 @@ function fitMapPrecisely(
   clampZoomAfterFit(map, minZoom, maxZoom)
 }
 
-function userLocationIcon(): google.maps.Symbol | undefined {
-  if (typeof google === 'undefined' || !google.maps?.SymbolPath) return undefined
-  return {
-    path: google.maps.SymbolPath.CIRCLE,
-    scale: 8,
-    fillColor: '#4285F4',
-    fillOpacity: 1,
-    strokeColor: '#ffffff',
-    strokeWeight: 3,
-  }
-}
-
-function stopMarkerIcon(index: number, isActive: boolean): google.maps.Symbol | undefined {
-  if (typeof google === 'undefined' || !google.maps?.SymbolPath) return undefined
-  const primary = index === 0 || isActive
-  return {
-    path: google.maps.SymbolPath.CIRCLE,
-    scale: primary ? 12 : 11,
-    fillColor: primary ? ROUTE_ORANGE : '#ffffff',
-    fillOpacity: 1,
-    strokeColor: primary ? '#ffffff' : ROUTE_ORANGE,
-    strokeWeight: primary ? 2.5 : 2.5,
-  }
-}
-
-function stopMarkerLabel(index: number, isActive: boolean): google.maps.MarkerLabel | undefined {
-  const primary = index === 0 || isActive
-  return {
-    text: String(index + 1),
-    color: primary ? '#ffffff' : ROUTE_ORANGE,
-    fontSize: '11px',
-    fontWeight: '700',
-  }
-}
-
 export type MapViewSize = 'compact' | 'full'
 
 export interface RouteInfo {
@@ -227,14 +140,15 @@ interface Props {
 function RoutePolyline({ stops }: { stops: ItineraryStop[] }) {
   const map = useMap()
   const polylinesRef = useRef<google.maps.Polyline[]>([])
+  const directionsRenderersRef = useRef<google.maps.DirectionsRenderer[]>([])
 
   useEffect(() => {
     if (!map || stops.length < 2) return
 
-    let cancelled = false
-
     polylinesRef.current.forEach((p) => p.setMap(null))
     polylinesRef.current = []
+    directionsRenderersRef.current.forEach((r) => r.setMap(null))
+    directionsRenderersRef.current = []
 
     const style = {
       geodesic: true,
@@ -244,27 +158,34 @@ function RoutePolyline({ stops }: { stops: ItineraryStop[] }) {
       map,
     }
 
-    void (async () => {
-      for (let i = 1; i < stops.length; i++) {
-        if (cancelled) return
-        const enc = stops[i].travel_from_prev?.encoded_polyline
-        if (enc && google.maps.geometry?.encoding) {
-          const path = google.maps.geometry.encoding.decodePath(enc)
-          polylinesRef.current.push(new google.maps.Polyline({ ...style, path }))
-        } else {
-          const origin = { lat: stops[i - 1].coordinates.lat, lng: stops[i - 1].coordinates.lng }
-          const destination = { lat: stops[i].coordinates.lat, lng: stops[i].coordinates.lng }
-          const result = await fetchComputeRoute(origin, destination, 'WALK')
-          if (cancelled || !result?.polyline || !google.maps.geometry?.encoding) continue
-          const path = google.maps.geometry.encoding.decodePath(result.polyline)
-          polylinesRef.current.push(new google.maps.Polyline({ ...style, path }))
-        }
+    const directionsService = new google.maps.DirectionsService()
+
+    for (let i = 1; i < stops.length; i++) {
+      const enc = stops[i].travel_from_prev?.encoded_polyline
+      if (enc && google.maps.geometry?.encoding) {
+        const path = google.maps.geometry.encoding.decodePath(enc)
+        polylinesRef.current.push(new google.maps.Polyline({ ...style, path }))
+      } else {
+        const origin = { lat: stops[i - 1].coordinates.lat, lng: stops[i - 1].coordinates.lng }
+        const destination = { lat: stops[i].coordinates.lat, lng: stops[i].coordinates.lng }
+        const renderer = new google.maps.DirectionsRenderer({
+          map,
+          suppressMarkers: true,
+          polylineOptions: { strokeColor: ROUTE_ORANGE, strokeOpacity: 0.9, strokeWeight: 4 },
+        })
+        directionsRenderersRef.current.push(renderer)
+        directionsService.route(
+          { origin, destination, travelMode: google.maps.TravelMode.WALKING },
+          (result, status) => {
+            if (status === 'OK' && result) renderer.setDirections(result)
+          },
+        )
       }
-    })()
+    }
 
     return () => {
-      cancelled = true
       polylinesRef.current.forEach((p) => p.setMap(null))
+      directionsRenderersRef.current.forEach((r) => r.setMap(null))
     }
   }, [map, stops])
 
@@ -474,8 +395,7 @@ function OriginToPlaceRoute({
   onRouteError?: (message: string | null) => void
 }) {
   const map = useMap()
-  const polylineRef = useRef<google.maps.Polyline | null>(null)
-  const lastRouteFitKey = useRef('')
+  const rendererRef = useRef<google.maps.DirectionsRenderer | null>(null)
   const [resolvedOrigin, setResolvedOrigin] = useState<LatLng | null>(
     typeof origin === 'string' ? null : origin,
   )
@@ -500,10 +420,8 @@ function OriginToPlaceRoute({
   useEffect(() => {
     if (!map || !resolvedOrigin) return
 
-    if (polylineRef.current) {
-      polylineRef.current.setMap(null)
-      polylineRef.current = null
-    }
+    rendererRef.current?.setMap(null)
+    rendererRef.current = null
     onRouteInfo?.(null)
     onRouteError?.(null)
 
@@ -512,63 +430,65 @@ function OriginToPlaceRoute({
       return
     }
 
-    let cancelled = false
+    const renderer = new google.maps.DirectionsRenderer({
+      map,
+      suppressMarkers: true,
+      polylineOptions: { strokeColor: ROUTE_ORANGE, strokeOpacity: 0.9, strokeWeight: 4 },
+    })
+    rendererRef.current = renderer
 
-    function finishError(primary: string) {
-      if (cancelled) return
+    const directionsService = new google.maps.DirectionsService()
+    const travelMode =
+      mode === 'DRIVE' ? google.maps.TravelMode.DRIVING : google.maps.TravelMode.WALKING
+    const altMode =
+      mode === 'DRIVE' ? google.maps.TravelMode.WALKING : google.maps.TravelMode.DRIVING
+
+    function finishError(primary: string, fallback?: string) {
       onRouteError?.(
-        `Could not draw route (${primary}). ` +
-          'Enable Routes API on your Maps key, then retry.',
+        `Could not draw route (${primary}${fallback ? ` / ${fallback}` : ''}). ` +
+          'Check that Directions API is enabled for your Maps key.',
       )
     }
 
-    void (async () => {
-      const result = await fetchComputeRoute(
-        resolvedOrigin,
-        destination,
-        travelModeToRoutesApi(mode),
-      )
-      if (cancelled) return
-      if (!result?.polyline) {
-        finishError('No route found')
-        return
-      }
-
-      const bounds = drawRoute(map, result.polyline, polylineRef, {
-        top: 96,
-        right: 48,
-        bottom: 240,
-        left: 48,
-      })
-
-      onRouteInfo?.({
-        distance: result.distance,
-        duration: result.duration,
-        destinationName,
-        originLabel,
-      })
-
-      if (bounds && resolvedOrigin) {
-        const routeKey = `${resolvedOrigin.lat.toFixed(5)},${resolvedOrigin.lng.toFixed(5)}|${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}|${mode}`
-        if (lastRouteFitKey.current !== routeKey) {
-          lastRouteFitKey.current = routeKey
-          const span = boundsSpanKm(bounds)
-          if (span > 40) {
-            map.setCenter(destination)
-            map.setZoom(15)
-          } else {
-            clampZoomAfterFit(map, 14, 17)
-          }
+    function applyResult(result: google.maps.DirectionsResult) {
+      renderer.setDirections(result)
+      const leg = result.routes[0]?.legs[0]
+      if (leg) {
+        onRouteInfo?.({
+          distance: leg.distance?.text ?? '',
+          duration: leg.duration?.text ?? '',
+          destinationName,
+          originLabel,
+        })
+        const bounds = result.routes[0]?.bounds
+        if (map && bounds) {
+          map.fitBounds(bounds, { top: 96, right: 48, bottom: 240, left: 48 })
         }
       }
-    })()
+    }
+
+    directionsService.route(
+      { origin: resolvedOrigin, destination, travelMode },
+      (result, status) => {
+        if (status === 'OK' && result) {
+          applyResult(result)
+          return
+        }
+        directionsService.route(
+          { origin: resolvedOrigin, destination, travelMode: altMode },
+          (altResult, altStatus) => {
+            if (altStatus === 'OK' && altResult) {
+              applyResult(altResult)
+            } else {
+              finishError(status, altStatus)
+            }
+          },
+        )
+      },
+    )
 
     return () => {
-      cancelled = true
-      if (polylineRef.current) {
-        polylineRef.current.setMap(null)
-        polylineRef.current = null
-      }
+      rendererRef.current?.setMap(null)
       onRouteInfo?.(null)
       onRouteError?.(null)
     }
@@ -702,26 +622,20 @@ function MapMarkers({
   onMarkerClick,
   showUserLocation,
   userLocation,
-  numberedStops,
 }: {
   markers: (Place | ItineraryStop)[]
   activeStopIndex: number | null
   onMarkerClick: (index: number) => void
   showUserLocation: boolean
   userLocation: LatLng | null
-  numberedStops: boolean
+  numberedStops?: boolean
 }) {
-  const apiLoaded = useApiIsLoaded()
-
   return (
     <>
       {showUserLocation && userLocation && isValidCoord(userLocation) && (
-        <Marker
-          position={userLocation}
-          title="Your location"
-          zIndex={10}
-          icon={apiLoaded ? userLocationIcon() : undefined}
-        />
+        <AdvancedMarker position={userLocation} title="Your location" zIndex={10}>
+          <div className="user-location-dot" />
+        </AdvancedMarker>
       )}
 
       {markers.map((item, i) => {
@@ -730,15 +644,21 @@ function MapMarkers({
         const isActive = activeStopIndex === i
 
         return (
-          <Marker
+          <AdvancedMarker
             key={`${('place_id' in item && item.place_id) ? item.place_id : 'm'}-${i}`}
             position={coords}
             title={name}
             zIndex={isActive ? 5 : 1}
-            icon={apiLoaded ? stopMarkerIcon(i, isActive) : undefined}
-            label={apiLoaded && numberedStops ? stopMarkerLabel(i, isActive) : undefined}
             onClick={() => onMarkerClick(i)}
-          />
+          >
+            <Pin
+              background={isActive ? ROUTE_ORANGE : '#ffffff'}
+              borderColor={isActive ? '#C44A00' : ROUTE_ORANGE}
+              glyphColor={isActive ? '#ffffff' : ROUTE_ORANGE}
+              glyph={String(i + 1)}
+              scale={isActive ? 1.2 : 1}
+            />
+          </AdvancedMarker>
         )
       })}
     </>
@@ -779,7 +699,6 @@ function MapCanvas({
     isValidCoord(focusPos) &&
     (zoomFocusOnActive || (isCompact && markerCoords.length === 1))
   const focusZoom = isCompact ? 17 : 16
-  const numberedStops = (itinerary?.length ?? 0) >= 2
 
   const routeDestIndex = customRoute?.destinationIndex ?? activeStopIndex
   const routeDestination =
@@ -796,6 +715,7 @@ function MapCanvas({
       <Map
         defaultCenter={defaultCenter}
         defaultZoom={markerCoords.length > 0 ? (isCompact ? 17 : initialZoom) : DEFAULT_ZOOM}
+        mapId="hodari-map"
         className="h-full w-full"
         style={{ width: '100%', height: '100%', display: 'block' }}
         gestureHandling="greedy"
@@ -826,7 +746,6 @@ function MapCanvas({
           onMarkerClick={onMarkerClick}
           showUserLocation={showUserLocation}
           userLocation={userLocation}
-          numberedStops={numberedStops}
         />
 
         {itinerary && itinerary.length >= 2 && !routeFromUser && !customRoute && (

@@ -1,5 +1,5 @@
-import LandingPage from '@/components/LandingPage'
+import HodariLanding from '@/components/landing/HodariLanding'
 
 export default function HomePage() {
-  return <LandingPage />
+  return <HodariLanding />
 }
