@@ -8,17 +8,22 @@ import {
   Map as MapIcon,
   MapPin,
   Menu,
+  MessageSquare,
+  Mic,
   Moon,
   PanelLeftClose,
   PanelRightClose,
   Send,
+  Square,
   Sun,
+  Volume2,
+  VolumeX,
 } from 'lucide-react'
 import type { ChatMessage, Theme } from '@/lib/types'
 import type { MapSnapshot } from '@/lib/mapHistory'
+import type { VoiceState } from '@/hooks/useVoice'
 import { ModelSwitcher, type ModelId } from './ModelSwitcher'
 import { CollapsibleMessage } from './CollapsedReply'
-import { VoiceButton } from './VoiceButton'
 import { TypingIndicator } from './TypingIndicator'
 import { OpenMapButton } from './OpenMapButton'
 
@@ -28,7 +33,14 @@ interface Props {
   thinkingSteps: string[]
   streamingStarted: boolean
   onSend: (text: string) => void
-  onVoiceTranscript?: (text: string) => void
+  /** Single shared voice instance, owned by the parent (avoids duplicate recorders). */
+  voiceState?: VoiceState
+  voiceSupported?: boolean
+  voiceWarning?: string
+  voiceLiveText?: string
+  onVoiceToggle?: () => void
+  /** Stops everything: dictation, speech output, and the in-flight request. */
+  onVoiceStop?: () => void
   historyItems: Array<{ id: string; title: string; updatedAt: number }>
   mapArchive?: MapSnapshot[]
   onSelectMapArchive?: (id: string) => void
@@ -47,7 +59,14 @@ interface Props {
   theme: Theme
   onToggleTheme: () => void
   hasLocation: boolean
+  speakReplies?: boolean
+  speechOutSupported?: boolean
+  onToggleSpeakReplies?: () => void
   onCollapse?: () => void
+  onStop?: () => void
+  uiMode?: 'chat' | 'voice'
+  onEnterChatMode?: () => void
+  onEnterVoiceMode?: () => void
 }
 
 const CHIPS = [
@@ -62,7 +81,12 @@ export function ChatPanel({
   loading,
   streamingStarted,
   onSend,
-  onVoiceTranscript,
+  voiceState = 'idle',
+  voiceSupported = false,
+  voiceWarning,
+  voiceLiveText,
+  onVoiceToggle,
+  onVoiceStop,
   historyItems,
   onNewChat,
   onSelectHistory,
@@ -81,7 +105,14 @@ export function ChatPanel({
   theme,
   onToggleTheme,
   hasLocation,
+  speakReplies,
+  speechOutSupported,
+  onToggleSpeakReplies,
   onCollapse,
+  onStop,
+  uiMode = 'chat',
+  onEnterChatMode,
+  onEnterVoiceMode,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -95,6 +126,7 @@ export function ChatPanel({
   const reduced = useReducedMotion()
 
   const streaming = loading && streamingStarted
+  const voiceActive = voiceState !== 'idle'
   const lastMsgId = messages[messages.length - 1]?.id
   const showThinking = loading && !streamingStarted
   const showWriting = streaming
@@ -185,48 +217,106 @@ export function ChatPanel({
           Location active
         </p>
       )}
+      {voiceState === 'listening' && voiceLiveText && (
+        <p className="mb-1.5 ml-1 truncate text-[12px] italic text-[var(--text-secondary)]">
+          “{voiceLiveText}”
+        </p>
+      )}
+      {voiceWarning && voiceState === 'idle' && (
+        <p className="mb-1.5 ml-1 text-[11px] text-[var(--text-secondary)]">{voiceWarning}</p>
+      )}
       <form onSubmit={handleSubmit}>
-        <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-header)] px-4 py-1 shadow-sm focus-within:border-amber-400">
-          {onVoiceTranscript && (
-            <VoiceButton onTranscript={onVoiceTranscript} disabled={loading} compact />
+        <div
+          className={`flex items-center gap-2 rounded-full border bg-[var(--bg-header)] px-4 py-1 shadow-sm focus-within:border-amber-400 ${
+            voiceActive ? 'border-amber-400/70' : 'border-[var(--border)]'
+          }`}
+        >
+          {voiceSupported && onVoiceToggle && (
+            <button
+              type="button"
+              onClick={onVoiceToggle}
+              disabled={loading && voiceState === 'idle'}
+              aria-label={voiceState === 'listening' ? 'Stop listening and send' : 'Start voice input'}
+              title={voiceState === 'listening' ? 'Stop listening and send' : 'Start voice input'}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${
+                voiceState === 'listening'
+                  ? 'bg-red-500 text-white'
+                  : 'text-gray-500 hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-900/30'
+              }`}
+            >
+              <Mic className="h-4 w-4" />
+            </button>
           )}
           <input
             ref={inputRef}
             type="text"
-            placeholder="Time, budget, preferences, location…"
-            className="min-w-0 flex-1 bg-transparent py-3 text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-secondary)]"
+            placeholder={
+              voiceState === 'listening' ? 'Listening…'
+              : voiceState === 'thinking' ? 'Thinking…'
+              : voiceState === 'speaking' ? 'Hodari is speaking…'
+              : voiceState === 'paused' ? 'Paused — tap Stop or the mic'
+              : 'Time, budget, preferences, location…'
+            }
+            className={`min-w-0 flex-1 bg-transparent py-3 text-[13px] text-[var(--text-primary)] outline-none ${
+              voiceActive ? 'placeholder:text-amber-600/80' : 'placeholder:text-[var(--text-secondary)]'
+            }`}
             disabled={loading}
           />
-          <button
-            type="submit"
-            disabled={loading}
-            aria-label="Send message"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e07d3a] text-white transition-colors hover:bg-[#c96a2e] disabled:opacity-40"
-          >
-            <Send className="h-4 w-4" />
-          </button>
+          {(loading || voiceActive) && (onStop || onVoiceStop) ? (
+            <button
+              type="button"
+              onClick={() => { onVoiceStop?.(); if (!onVoiceStop) onStop?.() }}
+              aria-label="Stop"
+              title="Stop voice and generation"
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-red-500 px-3.5 text-[12px] font-medium text-white transition-colors hover:bg-red-600"
+            >
+              <Square className="h-3 w-3 fill-current" />
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={loading}
+              aria-label="Send message"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e07d3a] text-white transition-colors hover:bg-[#c96a2e] disabled:opacity-40"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </form>
-      <div className="mt-3 flex flex-wrap justify-center gap-2">
-        {CHIPS.map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => onSend(s)}
-            className="rounded-full border border-[var(--border)] px-3.5 py-1.5 text-[13px] text-[var(--text-primary)] transition-colors hover:bg-amber-50 dark:hover:bg-amber-900/30"
-          >
-            {s}
-          </button>
-        ))}
-      </div>
+      {messages.length === 0 && (
+        <div className="mt-3 flex flex-wrap justify-center gap-2">
+          {CHIPS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => onSend(s)}
+              className="rounded-full border border-[var(--border)] px-3.5 py-1.5 text-[13px] text-[var(--text-primary)] transition-colors hover:bg-amber-50 dark:hover:bg-amber-900/30"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 
   const messageList = (
     <>
-      <div ref={scrollRef} onScroll={handleScroll} className="chat-scroll flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-        <div className="mx-auto w-full max-w-[720px] space-y-5">
-          {messages.map((msg) => (
+      <div className="relative min-h-0 overflow-hidden">
+        <div ref={scrollRef} onScroll={handleScroll} className="chat-scroll h-full min-h-0 overflow-y-auto px-4 py-5 sm:px-6">
+          <div className="mx-auto w-full max-w-[720px] space-y-5">
+            {isEmpty && (
+              <div className="flex flex-col items-center px-2 pb-6 pt-[8vh] text-center sm:pt-[10vh]">
+                <p className="font-display text-5xl font-semibold italic text-amber-600/20">Where to?</p>
+                <p className="mx-auto mt-5 max-w-sm text-[13px] leading-relaxed text-[var(--text-secondary)]">
+                  Tell me your time, budget, and preferences, and I&apos;ll build your matchday plan.
+                </p>
+              </div>
+            )}
+
+            {messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {msg.role === 'user' ? (
                 <div className="animate-slide-right max-w-[min(680px,90%)] rounded-2xl rounded-br-[4px] bg-[#e07d3a] px-3.5 py-2.5">
@@ -278,32 +368,60 @@ export function ChatPanel({
             </div>
           )}
 
-          <div ref={bottomRef} />
+            <div ref={bottomRef} />
+          </div>
         </div>
+
+        <AnimatePresence>
+          {(!atBottom || hasNewBelow) && messages.length > 0 && (
+            <motion.button
+              type="button"
+              initial={reduced ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduced ? undefined : { opacity: 0, y: 8 }}
+              transition={{ duration: reduced ? 0 : 0.2 }}
+              onClick={() => scrollToBottom(reduced ? 'auto' : 'smooth')}
+              className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-header)]/95 px-4 py-1.5 text-[13px] text-[var(--text-primary)] shadow-lg backdrop-blur-sm hover:border-amber-300"
+            >
+              <ChevronDown className="h-4 w-4" />
+              New message
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
-      <AnimatePresence>
-        {(!atBottom || hasNewBelow) && messages.length > 0 && (
-          <motion.button
-            type="button"
-            initial={reduced ? false : { opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduced ? undefined : { opacity: 0, y: 8 }}
-            transition={{ duration: reduced ? 0 : 0.2 }}
-            onClick={() => scrollToBottom(reduced ? 'auto' : 'smooth')}
-            className="absolute bottom-28 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-header)]/95 px-4 py-1.5 text-[13px] text-[var(--text-primary)] shadow-lg backdrop-blur-sm hover:border-amber-300"
-          >
-            <ChevronDown className="h-4 w-4" />
-            New message
-          </motion.button>
-        )}
-      </AnimatePresence>
-
-      <div className="shrink-0 border-t border-[var(--border)] bg-[var(--bg-chat)]/80 px-4 py-4 backdrop-blur-md sm:px-6">
+      <div className="relative z-10 shrink-0 border-t border-[var(--border)] bg-[var(--bg-chat)]/95 px-4 py-4 backdrop-blur-md sm:px-6">
         {composer}
       </div>
     </>
   )
+
+  const modeToggle = onEnterChatMode && onEnterVoiceMode ? (
+    <div className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--bg-header)]/90 p-1 shadow-sm backdrop-blur-sm">
+      <button
+        type="button"
+        onClick={onEnterChatMode}
+        aria-pressed={uiMode === 'chat'}
+        className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-medium transition-colors sm:px-3.5 sm:text-[12px] ${
+          uiMode === 'chat' ? 'bg-amber-600 text-white shadow' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+        }`}
+      >
+        <MessageSquare className="h-3.5 w-3.5" />
+        Chat
+      </button>
+      <button
+        type="button"
+        onClick={onEnterVoiceMode}
+        aria-pressed={uiMode === 'voice'}
+        className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-medium transition-colors sm:px-3.5 sm:text-[12px] ${
+          uiMode === 'voice' ? 'bg-amber-600 text-white shadow' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+        }`}
+      >
+        <Mic className="h-3.5 w-3.5" />
+        Voice
+      </button>
+    </div>
+  ) : null
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-transparent">
@@ -397,14 +515,28 @@ export function ChatPanel({
         }`}
       >
         <div
-          className="flex shrink-0 items-center justify-between bg-transparent px-4 pb-3 pt-3.5 sm:px-5"
+          className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-transparent px-4 pb-3 pt-3.5 sm:px-5"
           style={{ backgroundColor: theme === 'dark' ? 'rgba(26, 22, 18, 0.35)' : 'rgba(255, 255, 255, 0.3)' }}
         >
-          <div>
-            <h1 className="font-display text-lg font-semibold text-[var(--text-primary)]">Hodari</h1>
-            <p className="mt-0.5 text-[11px] uppercase tracking-wider text-[var(--text-secondary)]">FIFA World Cup 2026 · Guide</p>
+          <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
+            <div className="min-w-0">
+              <h1 className="font-display text-lg font-semibold text-[var(--text-primary)]">Hodari</h1>
+              <p className="mt-0.5 text-[11px] uppercase tracking-wider text-[var(--text-secondary)]">FIFA World Cup 2026 · Guide</p>
+            </div>
+            {modeToggle}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            {speechOutSupported && onToggleSpeakReplies && (
+              <button
+                type="button"
+                onClick={onToggleSpeakReplies}
+                aria-label={speakReplies ? 'Mute spoken replies' : 'Speak replies aloud'}
+                title={speakReplies ? 'Mute spoken replies' : 'Speak replies aloud'}
+                className={`rounded-lg border p-1.5 transition-colors ${speakReplies ? 'border-amber-400/60 text-amber-600' : 'border-[var(--border)] text-[var(--text-secondary)] hover:border-amber-300 hover:text-amber-600'}`}
+              >
+                {speakReplies ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              </button>
+            )}
             <button
               type="button"
               onClick={onToggleTheme}
@@ -445,21 +577,9 @@ export function ChatPanel({
         </div>
         <div className="h-px shrink-0 bg-gradient-to-r from-transparent via-amber-200/40 to-transparent dark:via-amber-800/30" />
 
-        {isEmpty ? (
-          <div className="flex flex-1 flex-col items-center justify-start px-6 pt-[10vh] sm:pt-[12vh]">
-            <div className="mx-auto w-full max-w-[720px] text-center">
-              <p className="font-display text-5xl font-semibold italic text-amber-600/20">Where to?</p>
-              <p className="mx-auto mt-5 max-w-sm text-[13px] leading-relaxed text-[var(--text-secondary)]">
-                Tell me your time, budget, and preferences, and I&apos;ll build your matchday plan.
-              </p>
-              <div className="mt-10">{composer}</div>
-            </div>
-          </div>
-        ) : (
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            {messageList}
-          </div>
-        )}
+        <div className="relative grid min-h-0 flex-1 grid-rows-[1fr_auto] overflow-hidden">
+          {messageList}
+        </div>
       </div>
     </div>
   )
