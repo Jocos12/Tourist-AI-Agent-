@@ -144,6 +144,7 @@ type BrowserSpeechRecognition = {
   interimResults: boolean
   lang: string
   onresult: ((event: { results: { length: number; [i: number]: { 0: { transcript: string } } } }) => void) | null
+  onstart: (() => void) | null
   onerror: (() => void) | null
   onend: (() => void) | null
   onstart: (() => void) | null
